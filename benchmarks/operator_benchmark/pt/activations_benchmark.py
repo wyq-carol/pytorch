@@ -5,7 +5,7 @@ import torch.nn as nn
 
 
 """
-Microbenchmarks for some activations.
+Microbenchmarks for some activation functions.
 """
 
 
@@ -38,9 +38,13 @@ ops_list = op_bench.op_list(
     attr_names=['op_name', 'op_func'],
     attrs=[
         ['Hardswish', nn.Hardswish],
+        ['Hardshrink', nn.Hardshrink],
+        ['Softshrink', nn.Softshrink],
+        ['Hardtanh', nn.Hardtanh],
         ['Hardsigmoid', nn.Hardsigmoid],
         ['ELU', nn.ELU],
         ['GELU', nn.GELU],
+        ['GLU', nn.GLU],
         ['SiLU', nn.SiLU],
         ['Softplus', nn.Softplus],
         ['Mish', nn.Mish],
@@ -51,6 +55,7 @@ ops_list = op_bench.op_list(
 inplace_ops_list = op_bench.op_list(
     attr_names=['op_name', 'op_func'],
     attrs=[
+        ['Hardtanh_', nn.Hardtanh],
         ['Hardswish_', nn.Hardswish],
         ['Hardsigmoid_', nn.Hardsigmoid],
         ['SiLU_', nn.SiLU],
