@@ -151,11 +151,35 @@ unary_ops_list = op_bench.op_list(
     ],
 )
 
-
 op_bench.generate_pt_tests_from_op_list(unary_ops_list,
                                         unary_ops_configs_short + unary_ops_configs_long,
                                         UnaryOpBenchmark)
 
+# Ops modeled after SciPy's special module
+special_ops_list = op_bench.op_list(
+    attr_names=['op_name', 'op_func'],
+    attrs=[
+        ['digamma', torch.special.digamma],
+        ['special.entr', torch.special.entr],
+        ['special.expit', torch.special.expit],
+        ['special.erfcx', torch.special.erfcx],
+        ['special.bessel_j0', torch.special.bessel_j0],
+        ['special.bessel_j1', torch.special.bessel_j1],
+        ['special.i0', torch.special.i0],
+        ['special.i0e', torch.special.i0e],
+        ['special.i1', torch.special.i1],
+        ['special.i1e', torch.special.i1e],
+        ['special.log_ndtr', torch.special.log_ndtr],
+        ['special.ndtr', torch.special.ndtr],
+        ['special.ndtri', torch.special.ndtri],
+        ['special.scaled_modified_bessel_k0', torch.special.scaled_modified_bessel_k0],
+        ['special.scaled_modified_bessel_k1', torch.special.scaled_modified_bessel_k1]
+    ],
+)
+
+op_bench.generate_pt_tests_from_op_list(special_ops_list,
+                                        unary_ops_configs_short,
+                                        UnaryOpBenchmark)
 
 if __name__ == "__main__":
     op_bench.benchmark_runner.main()
