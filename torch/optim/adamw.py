@@ -380,6 +380,8 @@ def _single_tensor_adamw(
         grad = grads[i] if not maximize else -grads[i]
         exp_avg = exp_avgs[i]
         exp_avg_sq = exp_avg_sqs[i]
+        if amsgrad:
+            max_exp_avg_sq = max_exp_avg_sqs[i]
         step_t = state_steps[i]
 
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
@@ -392,6 +394,8 @@ def _single_tensor_adamw(
             grad = torch.view_as_real(grad)
             exp_avg = torch.view_as_real(exp_avg)
             exp_avg_sq = torch.view_as_real(exp_avg_sq)
+            if amsgrad:
+                max_exp_avg_sq = torch.view_as_real(max_exp_avg_sq)
             param = torch.view_as_real(param)
 
         # update step
@@ -420,15 +424,19 @@ def _single_tensor_adamw(
             if amsgrad:
                 # Maintains the maximum of all 2nd moment running avg. till now
                 if differentiable:
-                    max_exp_avg_sqs_i = max_exp_avg_sqs[i].clone()
+                    max_exp_avg_sq = max_exp_avg_sq.clone()
+                torch.maximum(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
+                
+                if torch.is_complex(max_exp_avg_sqs[i]):
+                    max_exp_avg_sqs[i] = torch.view_as_complex(max_exp_avg_sq)
                 else:
-                    max_exp_avg_sqs_i = max_exp_avg_sqs[i]
-                max_exp_avg_sqs[i].copy_(torch.maximum(max_exp_avg_sqs_i, exp_avg_sq))
+                    max_exp_avg_sqs[i] = max_exp_avg_sq
+
                 # Uses the max. for normalizing running avg. of gradient
                 # Folds in (admittedly ugly) 1-elem step_size math here to avoid extra param-set-sized read+write
                 # (can't fold it into addcdiv_ below because addcdiv_ requires value is a Number, not a Tensor)
                 denom = (
-                    max_exp_avg_sqs[i].sqrt() / (bias_correction2_sqrt * step_size_neg)
+                    max_exp_avg_sq.sqrt() / (bias_correction2_sqrt * step_size_neg)
                 ).add_(eps / step_size_neg)
             else:
                 denom = (
@@ -448,9 +456,15 @@ def _single_tensor_adamw(
 
             if amsgrad:
                 # Maintains the maximum of all 2nd moment running avg. till now
-                torch.maximum(max_exp_avg_sqs[i], exp_avg_sq, out=max_exp_avg_sqs[i])
+                torch.maximum(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
+                
+                if torch.is_complex(max_exp_avg_sqs[i]):
+                    max_exp_avg_sqs[i] = torch.view_as_complex(max_exp_avg_sq)
+                else:
+                    max_exp_avg_sqs[i] = max_exp_avg_sq
+
                 # Use the max. for normalizing running avg. of gradient
-                denom = (max_exp_avg_sqs[i].sqrt() / bias_correction2_sqrt).add_(eps)
+                denom = (max_exp_avg_sq.sqrt() / bias_correction2_sqrt).add_(eps)
             else:
                 denom = (exp_avg_sq.sqrt() / bias_correction2_sqrt).add_(eps)
 
@@ -507,6 +521,9 @@ def _multi_tensor_adamw(
         device_exp_avgs = [torch.view_as_real(x) if torch.is_complex(x) else x for x in device_exp_avgs]
         device_exp_avg_sqs = [
             torch.view_as_real(x) if torch.is_complex(x) else x for x in device_exp_avg_sqs
+        ]
+        device_max_exp_avg_sqs = [
+            torch.view_as_real(x) if torch.is_complex(x) else x for x in device_max_exp_avg_sqs
         ]
         device_params = [torch.view_as_real(x) if torch.is_complex(x) else x for x in device_params]
 
