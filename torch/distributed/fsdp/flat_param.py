@@ -506,6 +506,10 @@ class FlatParamHandle:
         self._fully_sharded_module = fully_sharded_module
         self.pre_forward_order_index = None
         self.prefetched = False
+        # Maps each handle to its index in `all_handles`, which must be the
+        # same across ranks for the execution order validation to work
+        self._handle_index = None
+        
         # NOTE: For the code path using this flag, we only skip calling
         # `_use_sharded_views()` and do not skip switching to the sharded flat
         # parameter since whether `self.flat_param` uses the sharded or
