@@ -615,9 +615,12 @@ def can_skip_internal_checks(pr: "GitHubPR", comment_id: Optional[int] = None) -
     return comment.author_login == "facebook-github-bot"
 
 
-def get_ghstack_prs(repo: GitRepo, pr: "GitHubPR") -> List[Tuple["GitHubPR", str]]:
+def get_ghstack_prs(
+    repo: GitRepo, pr: "GitHubPR", open_only: bool = True
+) -> List[Tuple["GitHubPR", str]]:
     """
-    Get the open PRs in the stack that are below this PR.  Throws error if any of the PRs are out of sync.
+    Get the PRs in the stack that are below this PR (inclusive).  Throws error if any of the open PRs are out of sync.
+    @:param open_only: Only return open PRs
     """
     assert pr.is_ghstack_pr()
     entire_stack: List[Tuple["GitHubPR", str]] = []
@@ -638,7 +641,7 @@ def get_ghstack_prs(repo: GitRepo, pr: "GitHubPR") -> List[Tuple["GitHubPR", str
         stacked_pr_num = int(m.group("number"))
         if stacked_pr_num != pr.pr_num:
             stacked_pr = GitHubPR(pr.org, pr.project, stacked_pr_num)
-            if stacked_pr.is_closed():
+            if open_only and stacked_pr.is_closed():
                 print(
                     f"Skipping {idx+1} of {len(rev_list)} PR (#{stacked_pr_num}) as its already been merged"
                 )
@@ -648,6 +651,8 @@ def get_ghstack_prs(repo: GitRepo, pr: "GitHubPR") -> List[Tuple["GitHubPR", str
             entire_stack.append((pr, rev))
 
     for stacked_pr, rev in entire_stack:
+        if stacked_pr.is_closed():
+            continue
         if not are_ghstack_branches_in_sync(repo, stacked_pr.head_ref()):
             raise RuntimeError(
                 f"PR {stacked_pr.pr_num} is out of sync with the corresponding revision {rev} on "
@@ -1030,9 +1035,18 @@ class GitHubPR:
         comment_id: Optional[int] = None,
     ) -> List["GitHubPR"]:
         assert self.is_ghstack_pr()
-        ghstack_prs = get_ghstack_prs(repo, self)  # raises error if out of sync
+        ghstack_prs = get_ghstack_prs(
+            repo, self, open_only=False
+        )  # raises error if out of sync
+        pr_dependencies = []
         for pr, rev in ghstack_prs:
-            commit_msg = pr.gen_commit_message(filter_ghstack=True)
+            if pr.is_closed():
+                pr_dependencies.append(pr)
+                continue
+
+            commit_msg = pr.gen_commit_message(
+                filter_ghstack=True, ghstack_deps=pr_dependencies
+            )
             if pr.pr_num != self.pr_num:
                 # Raises exception if matching rule is not found
                 find_matching_merge_rule(
@@ -1043,9 +1057,14 @@ class GitHubPR:
                 )
             repo.cherry_pick(rev)
             repo.amend_commit_message(commit_msg)
-        return [x for x, _ in ghstack_prs]
+            pr_dependencies.append(pr)
+        return [x for x, _ in ghstack_prs if not x.is_closed()]
 
-    def gen_commit_message(self, filter_ghstack: bool = False) -> str:
+    def gen_commit_message(
+        self,
+        filter_ghstack: bool = False,
+        ghstack_deps: Optional[List["GitHubPR"]] = None,
+    ) -> str:
         """Fetches title and body from PR description
         adds reviewed by, pull request resolved and optionally
         filters out ghstack info"""
@@ -1061,6 +1080,8 @@ class GitHubPR:
         msg += msg_body
         msg += f"\nPull Request resolved: {self.get_pr_url()}\n"
         msg += f"Approved by: {approved_by_urls}\n"
+        if ghstack_deps:
+            msg += f"ghstack dependencies: {', '.join([f'#{pr.pr_num}' for pr in ghstack_deps])}\n"
         return msg
 
     def add_numbered_label(self, label_base: str) -> None:
