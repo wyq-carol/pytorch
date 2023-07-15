@@ -1158,3 +1158,7 @@ def red_text(msg):
 
 def blue_text(msg):
     return _color_text(msg, "blue")
+
+
+def reduction_num_output(reduction_type):
+    return 3 if "welford" in reduction_type else 1
