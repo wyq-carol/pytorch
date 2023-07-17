@@ -180,8 +180,8 @@ class TestFSDPMiscMultiProcess(FSDPTest):
             loss.backward()
 
             # self.a receives grad, self.b does not
-            a_grad = fsdp.module.a._handle[0].flat_param.grad
-            b_grad = fsdp.module.b._handle[0].flat_param.grad
+            a_grad = fsdp.module.a._handle.flat_param.grad
+            b_grad = fsdp.module.b._handle.flat_param.grad
             self.assertIsNotNone(a_grad)
             self.assertIsNone(b_grad)
 
@@ -349,8 +349,8 @@ class TestFSDPMiscMultiProcess(FSDPTest):
 
                 # Overlapped optimizer FSDP module should have sharded_grad as None.
                 for fsdp_unit in FSDP.fsdp_modules(fsdp_overlap):
-                    handles = fsdp_unit._handles
-                    for handle in handles:
+                    handle = fsdp_unit._handle
+                    if handle:
                         handle_grad = handle.sharded_grad
                         self.assertEqual(
                             None,

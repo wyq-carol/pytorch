@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.distributed._composable import fully_shard
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp._common_utils import _FSDPState
-from torch.distributed.fsdp.flat_param import FlatParamHandle, FlatParamHandle
+from torch.distributed.fsdp.flat_param import FlatParamHandle
 from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 from torch.testing._internal.common_dist_composable import (
     CompositeParamModel,
@@ -147,7 +147,8 @@ class TestRuntime(FSDPTest):
         # assumption about wrapper FQN being a suffix of composable FQN holds
         all_composable_handles = traversal_utils._get_fsdp_handles(composable_module)
         all_wrapped_handles = traversal_utils._get_fsdp_handles(fsdp_wrapped_model)
-        self._check_same_param_handles(all_composable_handles, all_wrapped_handles)
+        for c_handle, w_handle in zip(all_composable_handles, all_wrapped_handles):
+            self._check_same_param_handles(c_handle, w_handle)
         num_handles = len(all_composable_handles)
 
         orig_unshard = torch.distributed.fsdp._runtime_utils._unshard

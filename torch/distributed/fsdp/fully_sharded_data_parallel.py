@@ -491,7 +491,7 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
     @property
     def _has_params(self) -> bool:
         """Returns whether this FSDP instance manages any parameters."""
-        return hasattr(self, "_handle") and self._handle > 0
+        return hasattr(self, "_handle") and self._handle is not None
 
     @property
     def _flat_param(self) -> Optional[FlatParameter]:
@@ -795,6 +795,7 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
         Runs the forward pass for the wrapped module, inserting FSDP-specific
         pre- and post-forward sharding logic.
         """
+        handle = self._handle
         with torch.autograd.profiler.record_function(
             "FullyShardedDataParallel.forward"
         ):
@@ -802,13 +803,12 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
             unused = None
             args, kwargs = _pre_forward(
                 self,
-                self._handle,
+                handle,
                 _pre_forward_unshard,
                 self._fsdp_wrapped_module,
                 args,
                 kwargs,
             )
-            handle = self._handle
             if handle:
                 _p_assert(
                     handle.flat_param.device == self.compute_device,
@@ -817,7 +817,7 @@ class FullyShardedDataParallel(nn.Module, _FSDPState):
                 )
             output = self._fsdp_wrapped_module(*args, **kwargs)
             return _post_forward(
-                self, self._handle, _post_forward_reshard, self, unused, output
+                self, handle, _post_forward_reshard, self, unused, output
             )
 
     @staticmethod
