@@ -26,7 +26,6 @@ from torch.distributed.fsdp._init_utils import HYBRID_SHARDING_STRATEGIES
 from torch.distributed.fsdp._utils import _no_dispatch_record_stream
 from torch.distributed.fsdp.api import BackwardPrefetch
 from torch.distributed.fsdp.flat_param import (
-    _HandlesKey,
     FlatParameter,
     FlatParamHandle,
     HandleShardingStrategy,
@@ -234,8 +233,10 @@ def _share_state_and_init_handle_attrs(
     ``root_module`` 's module tree, and initializes handle attributes. These
     are done together to require a single loop over the states.
     """
-    for handle in root_state._handles:
-        handle.init_flat_param_attributes()
+    handle = root_state._handle:
+    if not handle:
+        return
+    handle.init_flat_param_attributes()
     inter_node_state = _validate_and_get_hybrid_shard_state(root_module)
     attr_name_to_values: Dict[str, Set[Any]] = {}
     for attr_name in HOMOGENEOUS_ATTR_NAMES:
@@ -263,7 +264,7 @@ def _share_state_and_init_handle_attrs(
             attr_name_to_values[attr_name].add(getattr(fsdp_state, attr_name))
         if fsdp_state is root_state:
             continue
-        handle_sharding_strategy = _get_sharding_strategy(fsdp_state._handles)
+        handle_sharding_strategy = _get_sharding_strategy(fsdp_state._handle)
         if handle_sharding_strategy in (
             HandleShardingStrategy.HYBRID_SHARD,
             HandleShardingStrategy._HYBRID_SHARD_ZERO2,
@@ -294,8 +295,8 @@ def _share_state_and_init_handle_attrs(
         fsdp_state._exec_order_data = root_state._exec_order_data
         fsdp_state._free_event_queue = root_state._free_event_queue
         fsdp_state._device_mesh = root_state._device_mesh
-        for handle in fsdp_state._handles:
-            handle.init_flat_param_attributes()
+        if fsdp_state._handle:
+            fsdp_state._handle.init_flat_param_attributes()
     for attr_name, attr_values in attr_name_to_values.items():
         if len(attr_values) != 1:
             raise ValueError(
@@ -455,8 +456,9 @@ def _pre_forward(
                     handle.flat_param._local_shard, device=torch.device("cpu")
                 ).pin_memory()
 
-        should_cast_forward_inputs = len(state._handles) > 0 and all(
-            not handle._force_full_precision for handle in state._handles
+
+        should_cast_forward_inputs = (
+            state._handle and not state._handle._force_full_precision
         )
 
         if should_cast_forward_inputs and state.mixed_precision.cast_forward_inputs:
@@ -581,11 +583,11 @@ def _root_pre_forward(
         # We cast buffers back to full precision if we're forcing full precision. Disjointly, we check if buffers
         # are in full precision and if we should cast them back to lower precision, which happens when
         # exiting eval() mode.
-        should_cast_buffers_to_full_prec = False
-        for handle in state._handles:
-            if handle._force_full_precision:
-                should_cast_buffers_to_full_prec = True
-                break
+        handle = state._handle
+        if handle:
+            should_cast_buffers_to_full_prec = handle._force_full_precision
+        else:
+            should_cast_buffers_to_full_prec = True
 
         if should_cast_buffers_to_full_prec:
             _cast_buffers_to_dtype_and_device(
@@ -619,14 +621,12 @@ def _root_pre_forward(
             state._needs_buffer_dtype_restore_check = False
 
         if state.forward_prefetch:
-            handles_keys = []
+            handles = []
             for fsdp_state in state._all_fsdp_states:
-                # TODO: Forward prefetch assumes singleton handles key. For the
-                # composable path, `_handles` may have more than one handle,
-                # whereas for the wrapper path, it has at most one handle.
-                handles_keys.extend((handle,) for handle in fsdp_state._handles)
-            for handles_key in handles_keys:
-                handles_key._needs_pre_forward_unshard = True
+                if fsdp_state._handle:
+                    handles.append(fsdp_state._handle)
+            for handle in handles:
+                state._needs_pre_forward_unshard[handle] = True
         _wait_for_computation_stream(
             state._device_handle.current_stream(),
             state._unshard_stream,
@@ -1139,7 +1139,7 @@ def _finalize_params(
 @no_type_check
 def _prefetch_handles(
     state: _FSDPState,
-    current_handles_key: _HandlesKey,
+    current_handles_key: FlatParamHandle,
     prefetch_mode: _PrefetchMode,
 ) -> None:
     """
@@ -1170,8 +1170,8 @@ def _prefetch_handles(
 @no_type_check
 def _get_handles_to_prefetch(
     state: _FSDPState,
-    current_handles_key: _HandlesKey,
-) -> List[_HandlesKey]:
+    current_handles_key: FlatParamHandle,
+) -> List[FlatParamHandle]:
     """
     Returns a :class:`list` of the handles keys to prefetch for the next
     module(s), where ``current_handles_key`` represents the current module.
@@ -1192,7 +1192,7 @@ def _get_handles_to_prefetch(
         f"currently in {training_state}",
     )
     eod = state._exec_order_data
-    target_handles_keys: List[_HandlesKey] = []
+    target_handles_keys: List[FlatParamHandle] = []
     if (
         training_state == HandleTrainingState.BACKWARD_PRE
         and state.backward_prefetch == BackwardPrefetch.BACKWARD_PRE
@@ -1220,7 +1220,7 @@ def _get_handles_to_prefetch(
 
 
 def _get_training_state(
-    handles_key: _HandlesKey,
+    handles_key: FlatParamHandle,
 ) -> HandleTrainingState:
     """Returns the training state of the handles in ``handles_key``."""
     _p_assert(len(handles_key) > 0, "Expects a non-empty handles key")
