@@ -143,11 +143,11 @@ class _ExecOrderData:
         if not handle:
             return
         # Only record the first usage of a handles key
-        if handles_key._post_forward_index:
+        if handle._post_forward_index:
             return
         index = len(self.handles_post_forward_order)
-        handles_key._post_forward_index = index
-        self.handles_post_forward_order.append(handles_key)
+        handle._post_forward_index = index
+        self.handles_post_forward_order.append(handle)
 
     def record_pre_forward(
         self, handle: Optional[FlatParamHandle], is_training: bool
@@ -165,7 +165,7 @@ class _ExecOrderData:
         self._check_order(handle, is_training)
         # Fix the order after the first iteration and only record the first
         # usage of a handles key
-        if not self.is_first_iter or handle._pre_forward_order_index
+        if not self.is_first_iter or handle._pre_forward_order_index:
             return
         index = len(self.handles_pre_forward_order)
         handle._pre_forward_order_index = index
