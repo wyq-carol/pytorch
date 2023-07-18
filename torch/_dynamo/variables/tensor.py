@@ -298,7 +298,7 @@ class TensorVariable(VariableTracker):
 
                 print("Falling back to generic", self.as_proxy(), name)
                 if name == "grad_fn":
-                    return variables.user_defined.AutogradNodeVariable(self.as_proxy().node.meta['example_value'].grad_fn, **options)
+                    return variables.user_defined.AutogradNodeVariable(self.as_proxy().node.meta['example_value'].grad_fn, self.as_proxy().grad_fn, **options)
                 return wrap_fx_proxy(
                     tx=tx,
                     proxy=GetAttrVariable.create_getattr_proxy(self.as_proxy(), name),
@@ -629,6 +629,11 @@ class TensorVariable(VariableTracker):
             )
             result = TorchVariable(torch.any, **options).call_function(tx, [result], {})
             return result.call_method(tx, "item", [], {})
+        if name == "register_hook":
+            assert len(args) == 1
+            assert isinstance(args[0], variables.functions.UserFunctionVariable)
+            # TODO WTF
+            return ConstantVariable(None)
         else:
             # Convert x.new(torch.Size) into x.new_empty(torch.Size),
             # as Tensor.new acts differently with a Size input versus a tuple input.
@@ -638,6 +643,7 @@ class TensorVariable(VariableTracker):
                 and isinstance(args[0], (SizeVariable, ShapeVariable))
             ):
                 name = "new_empty"
+            print("Fallthrough?", name)
             return wrap_fx_proxy(
                 tx,
                 tx.output.create_proxy(
