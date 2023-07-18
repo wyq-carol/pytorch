@@ -1173,7 +1173,7 @@ def _get_handle_to_prefetch(
         and state.backward_prefetch == BackwardPrefetch.BACKWARD_POST
     ):
         target_handle_candidate = eod.get_handle_to_backward_prefetch(current_handle)
-        if target_handle_candidate._needs_pre_backward_unshard and not target_handle_candidate._prefetched:
+        if target_handle_candidate and target_handle_candidate._needs_pre_backward_unshard and not target_handle_candidate._prefetched:
             target_handle = target_handle_candidate
         else:
             target_handle = None
@@ -1348,10 +1348,10 @@ def _register_post_backward_hook(
     )
     acc_grad = temp_flat_param.grad_fn.next_functions[0][0]  # type: ignore[union-attr]
     assert acc_grad is not None
-    hook_handle = acc_grad.register_hook(
+    acc_grad.register_hook(
         functools.partial(_post_backward_hook, state, handle)
     )
-    flat_param._post_backward_hook_state = (acc_grad, hook_handle)  # type: ignore[attr-defined]
+    flat_param._post_backward_hook_state = (acc_grad, None)  # type: ignore[attr-defined]
 
 
 def _register_post_backward_reshard_only_hook(
