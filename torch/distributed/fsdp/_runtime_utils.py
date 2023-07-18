@@ -374,9 +374,9 @@ def _reshard(
     if not handle:
         return
     handle.reshard(free_unsharded_flat_param)
-    if state.limit_all_gathers and free_unsharded_flat_param:
-        free_event = state._device_handle.Event()
-        free_event.record()
+    # if state.limit_all_gathers and free_unsharded_flat_param:
+        # free_event = state._device_handle.Event()
+        # free_event.record()
         # state._free_event_queue.enqueue(free_event)
     handle.post_reshard()
     # Since we prefetch entire handles keys at a time, conservatively mark
@@ -712,6 +712,7 @@ def _pre_backward_hook(
 @torch.no_grad()
 def _post_backward_hook(
     state: _FSDPState,
+    handle: FlatParamHandle,
     *unused: Any,
 ):
     """
