@@ -511,6 +511,8 @@ class FlatParamHandle:
         self._pre_forward_order_index = None
         # Index in `handles_post_forward_order`
         self._post_forward_index = None
+        self._needs_pre_backward_unshard = False
+        self._prefetched = False
 
         # NOTE: For the code path using this flag, we only skip calling
         # `_use_sharded_views()` and do not skip switching to the sharded flat
