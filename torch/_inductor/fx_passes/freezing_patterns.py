@@ -48,7 +48,10 @@ def lazy_init():
 
         _mkldnn_weight_pack_init()
 
+    from .binary_folding import binary_folding_init
+
     addmm_patterns_init()
+    binary_folding_init()
 
 
 def register_freezing_graph_pattern(pattern, extra_check=_return_true, pass_number=0):
