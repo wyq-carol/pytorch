@@ -986,6 +986,17 @@ class CppWrapperCodeGen(WrapperCodeGen):
                 """
             )
 
+            dev_idx = V.graph.scheduler.current_device.index
+            if V.graph.aot_mode:
+                self.wrapper_call.splice(
+                    f"at::cuda::CUDAStreamGuard stream_guard(at::cuda::getStreamFromExternal(stream, {dev_idx}));"
+                )
+            else:
+                self.wrapper_call.splice(
+                    f"auto stream = at::cuda::getCurrentCUDAStream({dev_idx});"
+                )
+
+
     def codegen_model_constructor(self):
         """
         // Generated code example
@@ -1312,10 +1323,9 @@ class CudaWrapperCodeGen(CppWrapperCodeGen):
                     int numWraps,
                     int sharedMemBytes,
                     void* args[],
-                    int device_index) {
+                    cudaStream_t stream) {
                 AT_CUDA_DRIVER_CHECK_OVERRIDE(cuLaunchKernel(
-                    func, gridX, gridY, gridZ, 32*numWraps, 1, 1, sharedMemBytes,
-                    at::cuda::getCurrentCUDAStream(device_index), args, nullptr));
+                    func, gridX, gridY, gridZ, 32*numWraps, 1, 1, sharedMemBytes, stream, args, nullptr));
             }
             """
         )
@@ -1392,7 +1402,7 @@ class CudaWrapperCodeGen(CppWrapperCodeGen):
         kernel_args_var = f"kernel_args_var_{next(self.kernel_callsite_id)}"
         self.writeline(f"void* {kernel_args_var}[] = {{{call_args}}};")
         self.writeline(
-            "launchKernel({}, {}, {}, {}, {}, {}, {}, {});".format(
+            "launchKernel({}, {}, {}, {}, {}, {}, {}, stream);".format(
                 name,
                 params["grid_x"],
                 params["grid_y"],
@@ -1400,6 +1410,5 @@ class CudaWrapperCodeGen(CppWrapperCodeGen):
                 params["num_warps"],
                 params["shared_mem"],
                 kernel_args_var,
-                device_index,
             )
         )
