@@ -57,6 +57,7 @@ from .utils import compile_times
 log = logging.getLogger(__name__)
 
 from torch._dispatch.python import enable_python_dispatcher
+from torch.utils._python_dispatch import _disable_current_modes
 
 always_optimize_code_objects = utils.ExactWeakKeyDictionary()
 null_context = contextlib.nullcontext
@@ -462,7 +463,7 @@ def catch_errors_wrapper(callback, hooks: Hooks):
                     )
                     return hijacked_callback(frame, cache_size, hooks, frame_state)
 
-        with compile_lock:
+        with compile_lock, _disable_current_modes():
             return callback(frame, cache_size, hooks, frame_state)
 
     catch_errors._torchdynamo_orig_callable = callback  # type: ignore[attr-defined]
@@ -851,7 +852,7 @@ def export(
 
         fake_mode (fake_tensor.FakeTensorMode): Use this fake_mode instead of creating an internal one.
         Useful during symbolic tracing, when user input is already fakefied. Implies free fake tensors
-        are allowed on `make_fx`.
+        are allowed on `make_fx`. `fake_mode` must contain a valid (not None) `shape_env` instance.
 
         **kwargs: Arbitrary keyword arguments to be passed to the function f.
 
@@ -884,6 +885,7 @@ def export(
     out_guards = None
     graph_captured_input = None
     graph_captured_result: Optional[Tuple[torch.Tensor, ...]] = None
+    fake_mode = fake_mode or _guards.detect_fake_mode()
     _allow_fake_constant: bool = (
         fake_mode is not None
     )  # Allow fake constants during symbolic tracing
@@ -934,7 +936,7 @@ def export(
         graph = gm
 
         nonlocal fake_mode, example_inputs
-        fake_mode = fake_mode or _guards.detect_fake_mode(inner_example_inputs)
+        fake_mode = fake_mode or _guards.detect_fake_mode()
         example_inputs = inner_example_inputs
 
         def result_capturing_wrapper(*graph_inputs):
