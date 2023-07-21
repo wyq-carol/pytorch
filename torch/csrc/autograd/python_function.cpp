@@ -204,7 +204,6 @@ auto PyNode::name() const -> std::string {
   return name;
 }
 
-#ifdef TORCH_COMPILED_AUTOGRAD
 void PyNode::compiled_args(CompiledNodeArgs& args) {
   static PyObject* method_name =
       PyUnicode_InternFromString("_compiled_autograd_key");
@@ -271,7 +270,6 @@ variable_list PyNode::apply_with_saved(
   saved.after(f->input_info);
   return result;
 }
-#endif
 
 } // namespace autograd
 } // namespace torch
