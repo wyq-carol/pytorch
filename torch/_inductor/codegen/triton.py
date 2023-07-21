@@ -2250,6 +2250,11 @@ class TritonScheduling:
 
         return tiled_groups, reduction_hint_val, mutations, index_dtype
 
+    def codegen_comment(self, node_schedule):
+        origins, detailed_origins = get_kernel_metadata(node_schedule)
+        if origins:
+            V.graph.wrapper_code.writeline(origins)
+
     def codegen_node_schedule(self, node_schedule, numel, reduction_numel):
         tiled_groups, reduction_hint_val, mutations, index_dtype = self.get_kernel_args(
             node_schedule, numel, reduction_numel
@@ -2266,7 +2271,7 @@ class TritonScheduling:
 
         src_code = kernel.codegen_kernel()
         kernel_name = self.define_kernel(src_code, node_schedule)
-
+        self.codegen_comment(node_schedule)
         kernel.call_kernel(kernel_name)
 
         if config.warn_mix_layout:
@@ -2347,7 +2352,8 @@ class TritonScheduling:
             compile_wrapper.writeline("''')")
 
             metadata_comment = f"# kernel path: {kernel_path}"
-            metadata_comment += "\n" + get_kernel_metadata(node_schedule)
+            origins, detailed_origins = get_kernel_metadata(node_schedule)
+            metadata_comment += "\n" + origins + "\n" + detailed_origins
             wrapper.define_kernel(
                 kernel_name, compile_wrapper.getvalue(), metadata_comment
             )
@@ -2368,7 +2374,9 @@ class TritonScheduling:
                 node.codegen(kernel.split_and_set_ranges(node.get_ranges()))
 
         src_code = render()
-        kernel_name = self.define_kernel(src_code, [template_node, *epilogue_nodes])
+        node_schedule = [template_node, *epilogue_nodes]
+        kernel_name = self.define_kernel(src_code, node_schedule)
+        self.codegen_comment(node_schedule)
         kernel.call_kernel(kernel_name)
         self.scheduler.free_buffers()
 
@@ -2407,6 +2415,7 @@ class TritonScheduling:
 
             src_code = kernel.codegen_kernel()
             kernel_name = self.define_kernel(src_code, [foreach_node])
+            self.codegen_comment([foreach_node])
             kernel.call_kernel(V.graph.wrapper_code, kernel_name)
 
         self.scheduler.free_buffers()
