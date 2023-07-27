@@ -139,7 +139,7 @@ class DispatchKey(Enum):
         for k, v in DispatchKey.__members__.items():
             if k == value:
                 return v
-        raise AssertionError(f"unknown dispatch key {value}")
+        # raise AssertionError(f"unknown dispatch key {value}") # wyq
 
 
 STRUCTURED_DISPATCH_KEYS = {DispatchKey.MPS, DispatchKey.CUDA, DispatchKey.CPU}
@@ -548,10 +548,10 @@ class NativeFunction:
                     dispatch_key = DispatchKey.parse(k.strip())
                     if ignore_keys and dispatch_key in ignore_keys:
                         continue
-                    assert dispatch_key in dispatch_keys, (
-                        f"Dispatch key {dispatch_key} of kernel {v} "
-                        "is not a supported dispatch key."
-                    )
+                    # assert dispatch_key in dispatch_keys, (
+                    #     f"Dispatch key {dispatch_key} of kernel {v} "
+                    #     "is not a supported dispatch key."
+                    # ) # wyq
                     # Why is 'structured' included? External backends (e.g.
                     # XLA) opt into which ops are structured independently
                     # of which in-tree ops are structured

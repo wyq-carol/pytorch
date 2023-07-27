@@ -9,6 +9,11 @@
 #include <c10/util/irange.h>
 #include <c10/util/llvmMathExtras.h>
 
+#include <c10/cuda/ATMConfig.h>
+#include <c10/cuda/CUDASwapQueues.h>
+#include <c10/core/ATMCommon.h>
+#include <c10/core/StorageImpl.h>
+
 #include <cuda_runtime_api.h>
 #include <algorithm>
 #include <bitset>
@@ -330,6 +335,162 @@ cudaError_t cudaMallocMaybeCapturing(void** p, size_t size) {
 
 } // namespace
 
+#define CUDA_INVALID_STREAM ((cudaStream_t)-1)
+
+struct EntityContext {
+  EntityContext() :
+        limit_(0), host_allocator_(nullptr), 
+        stream_in_(CUDA_INVALID_STREAM), stream_out_(CUDA_INVALID_STREAM) {}
+
+  size_t          limit() { return limit_; }
+  void            set_limit(size_t limit) { limit_ = limit; }
+
+  c10::Allocator* host_allocator() { return host_allocator_; }
+  void            set_host_allocator(c10::Allocator* host_allocator) { host_allocator_ = host_allocator; }
+  
+  cudaStream_t    stream_in() { return stream_in_; } 
+  cudaStream_t    stream_out() { return stream_out_; }
+  void            set_streams(cudaStream_t out, cudaStream_t in) {
+    if (stream_out_ == CUDA_INVALID_STREAM) {
+      TORCH_INTERNAL_ASSERT(out != CUDA_INVALID_STREAM);
+      stream_out_ = out; stream_in_  = in;
+    }
+  }
+
+  size_t          device_limit(int64_t current, int device) {
+    size_t device_limit = limit_;
+    if (device_limit == 0) {
+      size_t available;
+      size_t capacity;
+      C10_CUDA_CHECK(cudaMemGetInfo(&available, &capacity));
+      // Reserve five percent of available memory for non-tensor uses
+      device_limit = static_cast<size_t>((available + current) * 0.95);
+    }
+    return device_limit;
+  }
+
+  size_t             limit_;
+  at::Allocator*     host_allocator_;
+  cudaStream_t       stream_in_;
+  cudaStream_t       stream_out_;
+};
+static EntityContext entity_context;
+
+// cuda-entity guarded by mutex
+static uint64_t get_cuda_entity_uid() { 
+  static std::mutex uid_count_mutex;
+  static uint64_t   cuda_entity_uid_count = 0;
+  std::lock_guard<std::mutex> lock(uid_count_mutex); 
+  return cuda_entity_uid_count++;
+}
+
+void CUDART_CB __do_pageout_cb(cudaStream_t stream, cudaError_t status, void *data);
+void CUDART_CB __do_pagein_cb(cudaStream_t stream, cudaError_t status, void *data);
+
+struct CudaEntityStorageImpl : public c10::EntityStorageImpl {
+  CudaEntityStorageImpl(c10::StorageImpl* storage) :
+    c10::EntityStorageImpl(storage, entity_context.host_allocator()),
+    block_(nullptr), 
+    pageout_stream_(CUDA_INVALID_STREAM), 
+    pagein_stream_ (CUDA_INVALID_STREAM),
+    on_prefetch_(false),
+    need_prefetch_(false) {
+    entity_id_ = get_cuda_entity_uid();
+  }
+  ~CudaEntityStorageImpl() { }
+
+  void            set_block(Block* block) { block_ = block; }
+  Block*          block() const { return block_; }
+
+  void            assign_streams(cudaStream_t out, cudaStream_t in) {
+    if (pageout_stream_ == CUDA_INVALID_STREAM) {
+      TORCH_INTERNAL_ASSERT(out != CUDA_INVALID_STREAM);
+      pageout_stream_ = out;
+      pagein_stream_  = in;
+      compute_stream_ = block_->stream;
+    }
+  }
+  
+  void            do_pageout_cb() override {
+    std::unique_lock<std::mutex> lock(mutex_);
+    lock.unlock();
+    pgoutcb_cv_.notify_all();
+  }
+  void            do_pagein_cb() override {
+    std::unique_lock<std::mutex> lock(mutex_);
+    lock.unlock(); 
+    pgincb_cv_.notify_all();
+  }
+
+  void            do_pageout(void* dst, void* src, size_t size, bool sync) override;
+  void            do_pagein(void* dst, void* src, size_t size, bool sync) override;
+
+  cudaStream_t    swap(void* dst, const void* src, size_t size, enum cudaMemcpyKind kind, cudaStream_t stream) {
+    TORCH_INTERNAL_ASSERT(stream != CUDA_INVALID_STREAM);
+    cudaEvent_t event = create_event();
+    // Synchronize swap stream with compute stream
+    if(kind == cudaMemcpyDeviceToHost) {
+      C10_CUDA_CHECK(cudaEventRecord(event, compute_stream_));
+      C10_CUDA_CHECK(cudaStreamWaitEvent(stream, event, 0));
+    }
+    // Queue copy
+    C10_CUDA_CHECK(cudaMemcpyAsync(dst, src, size, kind, stream));
+    // Record event to wait on copy completion
+    C10_CUDA_CHECK(cudaEventRecord(event, stream));
+    event_ = event;
+    return stream;
+  }
+  void            pageout_internal() override {
+    CudaEntityEvictQueue::get_evict_queue().enqueue(this);
+  }
+  // enqueue prefetch queue, do fetch later
+  void            pagein_internal() override {
+    CudaEntityFetchQueue::get_fetch_queue().enqueue(this);
+  }
+
+  void            pageout_internal_sync() override;
+  void            pagein_internal_sync() override;
+
+  void            ensure_data() override {
+    ensure_data_internal(true /* reserved */);
+  }
+  // synchronize (true/false) ensure data
+  void            ensure_data_internal(bool sync) override;
+  // enqueue prefetch queue, do prefetch later
+  void            need_prefetch_internal() override { 
+    CudaEntityFetchQueue::get_fetch_queue().enqueue(this);
+  }
+  void            prefetch_internal() override { }
+  void            unsafe_wait_transfer() override { }
+
+  cudaEvent_t     create_event();
+
+  Block*                  block_; // cache block pointer for use while on reclaim list
+  cudaStream_t            compute_stream_;
+  cudaStream_t            pageout_stream_;
+  cudaStream_t            pagein_stream_;
+  cudaEvent_t             event_;
+
+  std::condition_variable pgincb_cv_;
+  std::condition_variable pgoutcb_cv_;
+  // guarded by mutex
+  bool                    on_prefetch_;
+  bool                    need_prefetch_;
+};
+
+void CUDART_CB __do_pageout_cb(cudaStream_t stream, cudaError_t status, void *data) {
+  C10_CUDA_CHECK(status);
+  EntityStorageRef_t impl = reinterpret_cast<EntityStorageRef_t>(data);
+  impl->impl_->do_pageout_cb();
+  delete impl; // must delete here, or entity leaks
+}
+void CUDART_CB __do_pagein_cb(cudaStream_t stream, cudaError_t status, void *data) {
+  C10_CUDA_CHECK(status);
+  EntityStorageRef_t impl = reinterpret_cast<EntityStorageRef_t>(data);
+  impl->impl_->do_pagein_cb();
+  delete impl;  // must delete here, or entity leaks   
+}
+
 class CachingAllocatorConfig {
  public:
   static size_t max_split_size() {
@@ -486,6 +647,11 @@ class DeviceCachingAllocator {
       : large_blocks(BlockComparator, /*is_small=*/false),
         small_blocks(BlockComparator, /*is_small=*/true) {
     stats.max_split_size = CachingAllocatorConfig::max_split_size();
+  }
+
+  cudaEvent_t create_event() {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    return create_event_internal();
   }
 
   // All public methods (except the above) acquire the allocator mutex.
@@ -669,7 +835,6 @@ class DeviceCachingAllocator {
 
   void free(Block* block) {
     std::lock_guard<std::recursive_mutex> lock(mutex);
-
     block->allocated = false;
 
     // following logic might modifying underlaying Block, causing the size
@@ -687,7 +852,6 @@ class DeviceCachingAllocator {
     });
     if (block->size >= CachingAllocatorConfig::max_split_size())
       update_stat(stats.oversize_allocations, -1);
-
     if (!block->stream_uses.empty()) {
       if (C10_UNLIKELY(captures_underway)) {
         // It's forbidden to cudaEventQuery an event recorded during CUDA graph
@@ -701,7 +865,6 @@ class DeviceCachingAllocator {
     } else {
       free_block(block);
     }
-
     c10::reportMemoryUsageToProfiler(
         orig_block_ptr,
         -orig_block_size,
@@ -863,7 +1026,6 @@ class DeviceCachingAllocator {
         [](const SegmentInfo& a, const SegmentInfo& b) {
           return a.address < b.address;
         });
-
     return result;
   }
 
@@ -1317,7 +1479,6 @@ class DeviceCachingAllocator {
     }
     return true;
   }
-
   bool release_cached_blocks() {
     // First ensure that all blocks that can't currently be allocated due to
     // outstanding events are returned to the pool.
@@ -1326,7 +1487,6 @@ class DeviceCachingAllocator {
     // Free all non-split cached blocks to system allocator
     release_blocks(large_blocks);
     release_blocks(small_blocks);
-
     for (auto it = graph_pools_freeable.begin();
          it != graph_pools_freeable.end();) {
       // See notifyCaptureDestroy for the strategy here.
@@ -1348,7 +1508,7 @@ class DeviceCachingAllocator {
   void release_block(Block* block) {
     C10_CUDA_CHECK(cudaFree((void*)block->ptr));
     total_allocated_memory -= block->size;
-
+    
     auto* pool = block->pool;
     if (pool->owner_PrivatePool) {
       // The cudaFreed block belonged to a CUDA graph's PrivatePool.
@@ -1534,7 +1694,7 @@ class THCCachingAllocator {
     return block;
   }
 
-  void init(int device_count) {
+  void init(int device_count, c10::Allocator* host_allocator) {
     const auto size = static_cast<int64_t>(device_allocator.size());
     if (size < device_count) {
       device_allocator.resize(device_count);
@@ -1542,6 +1702,8 @@ class THCCachingAllocator {
         device_allocator[i] = std::make_unique<DeviceCachingAllocator>();
       }
     }
+    entity_context.set_host_allocator(host_allocator);
+    entity_context.set_streams(cuda::getCustomCUDAStream().stream(), cuda::getCustomCUDAStream().stream());
   }
 
   /** allocates a block which is safe to use from the provided stream */
@@ -1557,6 +1719,11 @@ class THCCachingAllocator {
   }
 
   void free(void* ptr) {
+    #ifdef ATM_DEBUG_STORAGE 
+    // c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+    //                                 "THCCachingAllocator::free", 
+    //                                 "CUDA-Ptr:" + std::to_string(reinterpret_cast<uint64_t>(ptr)));
+    #endif
     if (!ptr) {
       return;
     }
@@ -1633,6 +1800,118 @@ class THCCachingAllocator {
 
 THCCachingAllocator caching_allocator;
 
+void CudaEntityStorageImpl::pageout_internal_sync() { 
+  std::lock_guard<std::mutex> lock(mutex_);
+  TORCH_INTERNAL_ASSERT(entity_stat_ == EntityStorageStat::kOnline);
+  TORCH_INTERNAL_ASSERT(trans_stat_ == TransStat::kNone);
+  set_block(caching_allocator.get_allocated_block(device_ptr()));
+  if (block_ == nullptr) return;
+  assign_streams(entity_context.stream_out(), entity_context.stream_in());
+  size_t size = capacity();
+  void* dst = host_data_ptr_.get();
+  if (!dst) {
+    host_data_ptr_ = host_allocator_->allocate(size);
+    dst = host_data_ptr_.get();
+  }
+  entity_stat_ = EntityStorageStat::kTrans;
+  trans_stat_ = TransStat::kPgOut;
+  do_pageout(dst, device_ptr(), size, true);
+  auto old_device_ptr = set_device_ptr(at::DataPtr(nullptr, device()));
+  old_device_ptr.clear(); // Fxxk LMS :-(
+  entity_stat_ = EntityStorageStat::kOffline; 
+  trans_stat_ = TransStat::kNone; 
+}
+
+void CudaEntityStorageImpl::pagein_internal_sync() { 
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (entity_stat_ == EntityStorageStat::kOnline && trans_stat_ == TransStat::kNone 
+    || entity_stat_ == EntityStorageStat::kTrans && trans_stat_ == TransStat::kPgIn) 
+    return;
+  TORCH_INTERNAL_ASSERT(entity_stat_ == EntityStorageStat::kOffline);
+  TORCH_INTERNAL_ASSERT(trans_stat_ == TransStat::kNone);
+  size_t size = capacity();
+  trans_stat_ = TransStat::kPgIn;
+  entity_stat_ = EntityStorageStat::kTrans;
+  
+  auto dst = allocator()->allocate(size);
+  do_pagein(dst.get(), host_data_ptr_.get(), size, true);
+  // must do move after do_pagein
+  set_device_ptr(std::move(dst));
+  trans_stat_ = TransStat::kNone;
+  entity_stat_ = EntityStorageStat::kOnline;
+}
+
+void CudaEntityStorageImpl::ensure_data_internal(bool __reserved__) {
+  std::lock_guard<std::mutex> ensure_lock(ensure_mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
+  switch (entity_stat_) {
+    case EntityStorageStat::kOnline   : return;
+    case EntityStorageStat::kOffline  : {
+      CudaEntityFetchQueue::get_fetch_queue().enqueue_front(this);
+      pgincb_cv_.wait(lock);
+      return;
+    }
+    case EntityStorageStat::kTrans    : {
+      if (trans_stat_ == TransStat::kPgIn) {
+        pgincb_cv_.wait(lock);
+      } else if (trans_stat_ == TransStat::kPgOut) {
+        pgoutcb_cv_.wait(lock);
+        CudaEntityFetchQueue::get_fetch_queue().enqueue_front(this);
+        pgincb_cv_.wait(lock);
+      }
+      return;
+    } }
+}
+
+inline cudaEvent_t CudaEntityStorageImpl::create_event() {
+  return caching_allocator.device_allocator[device().index()]->create_event();
+}
+
+void CudaEntityStorageImpl::do_pageout(void* dst, void* src, size_t size, bool sync) {
+  #ifdef ATM_DEBUG_STORAGE 
+  c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                  "CudaEntityStorageImpl::do_pageout", 
+                                  "CUDA Pageout Memory" + std::to_string(size));
+  #endif
+  
+  swap(dst, src, size, cudaMemcpyDeviceToHost, pageout_stream_);
+  
+  if (!sync) {
+    EntityStorageRef_t entity_ptr = new EntityStorageRef(this->storage_->entity());
+    C10_CUDA_CHECK(cudaStreamAddCallback(pageout_stream_, __do_pageout_cb, (void*)entity_ptr, 0));  
+  } else {
+    C10_CUDA_CHECK(cudaEventSynchronize(event_));
+    #ifdef ATM_DEBUG_STORAGE 
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "CudaEntityStorageImpl::do_pageout", 
+                                    "Done CUDA Pageout Memory" + std::to_string(size));
+    #endif
+  }
+}
+
+void CudaEntityStorageImpl::do_pagein(void* dst, void* src, size_t size, bool sync) {
+  #ifdef ATM_DEBUG_STORAGE 
+  c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                  "CudaEntityStorageImpl::do_pagein", 
+                                  "CUDA Pagein Memory" + std::to_string(size));
+  #endif
+  block_ = caching_allocator.get_allocated_block(dst);
+  pagein_stream_ = entity_context.stream_in();
+  swap(dst, src, size, cudaMemcpyHostToDevice, pagein_stream_);
+  
+  if (!sync) {
+    EntityStorageRef_t entity_ptr = new EntityStorageRef(this->storage_->entity());
+    C10_CUDA_CHECK(cudaStreamAddCallback(pagein_stream_, __do_pagein_cb, (void*)entity_ptr, 0));
+  } else {
+    C10_CUDA_CHECK(cudaEventSynchronize(event_));
+    #ifdef ATM_DEBUG_STORAGE 
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "CudaEntityStorageImpl::do_pagein", 
+                                    "Done CUDA Pagein Memory" + std::to_string(size));
+    #endif
+  }
+}
+
 // Returns whether to force all allocations to bypass the caching allocator and
 // go straight to cudaMalloc.  This setting is useful when debugging GPU memory
 // errors, since the caching allocator foils cuda-memcheck.
@@ -1649,8 +1928,14 @@ static void uncached_delete(void* ptr) {
 // NB: I decided not to fold this into THCCachingAllocator, because the latter
 // has a lot more methods and it wasn't altogether clear that they should
 // actually be publicly exposed
+
 struct CudaCachingAllocator : public Allocator {
   DataPtr allocate(size_t size) const override {
+    #ifdef ATM_DEBUG_3
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "CudaCachingAllocator::allocate", 
+                                    "CUDA Allocated Memory " + std::to_string(size));
+    #endif
     constexpr size_t one_exa_bytes = 1152921504606846976ULL;
     TORCH_CHECK_WITH(
         CUDAOutOfMemoryError,
@@ -1678,6 +1963,9 @@ struct CudaCachingAllocator : public Allocator {
       return &raw_delete;
     }
   }
+  c10::EntityStorageImpl* as_entity(c10::StorageImpl* storage) {
+    return new CudaEntityStorageImpl(storage);
+  }
 };
 
 CudaCachingAllocator device_allocator;
@@ -1686,8 +1974,16 @@ Allocator* get(void) {
   return &device_allocator;
 }
 
-void init(int device_count) {
-  caching_allocator.init(device_count);
+void init(int device_count, c10::Allocator* host_allocator) {
+  caching_allocator.init(device_count, host_allocator);
+  // auto t1 = host_allocator->allocate(67108864); // trick pre-allocate 2G memory
+  // auto t2 = host_allocator->allocate(67108864);
+  // auto t3 = host_allocator->allocate(67108864);
+  // auto t4 = host_allocator->allocate(67108864);
+  // auto t5 = host_allocator->allocate(67108864);
+  // auto t6 = host_allocator->allocate(67108864);
+  // auto t7 = host_allocator->allocate(67108864);
+  // auto t8 = host_allocator->allocate(67108864);
 }
 
 void setMemoryFraction(double fraction, int device) {
@@ -1762,6 +2058,36 @@ void notifyCaptureDestroy(int device, MempoolId_t mempool_id) {
   assertValidDevice(device);
   caching_allocator.device_allocator[device]->notifyCaptureDestroy(mempool_id);
 }
+
+// cuda entity methods 
+void createSwapEnv() {
+  CudaEntityEvictQueue::get_evict_queue().start_actions();
+  CudaEntityFetchQueue::get_fetch_queue().enable_queue();
+}
+
+void closeSwapEnv() {
+  CudaEntityEvictQueue::get_evict_queue().wait_and_stop_actions();
+  CudaEntityFetchQueue::get_fetch_queue().wait_and_stop_actions();
+}
+
+// clear prefetch queue
+void prefetchInit() {
+  CudaEntityFetchQueue::get_fetch_queue().wait_and_stop_actions();
+  CudaEntityFetchQueue::get_fetch_queue().enable_queue();
+}
+
+void prefetchAll() {
+  // beforPrefetchWaitAll(); // wyq
+  CudaEntityEvictQueue::get_evict_queue().wait_actions();
+  CudaEntityFetchQueue::get_fetch_queue().wait_actions();
+  CudaEntityFetchQueue::get_fetch_queue().start_actions();
+}
+
+void beforPrefetchWaitAll() {
+  CudaEntityEvictQueue::get_evict_queue().wait_actions();
+  CudaEntityFetchQueue::get_fetch_queue().wait_actions();
+}
+
 
 //
 // In CUDA IPC, sender sends a tensor to receiver, getIpcDevPtr

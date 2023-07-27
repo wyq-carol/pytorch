@@ -5,6 +5,34 @@
 # representing ScalarType's. They are now superseded by usage of
 # `aten::to()`. The ops remain here for backward compatibility purposes.
 
+# ATM to entity 
+- func: checkpoint(Tensor self) -> Tensor
+  variants: method
+
+- func: uncheckpoint(Tensor self) -> Tensor
+  variants: method
+
+- func: decheckpoint(Tensor self) -> Tensor
+  variants: method
+
+- func: evict_checkpoint(Tensor self) -> bool
+  variants: method
+
+- func: remat_checkpoint(Tensor self) -> Tensor
+  variants: method
+
+- func: pageout_manual(Tensor self) -> bool
+  variants: method
+
+- func: pagein_manual(Tensor self) -> bool
+  variants: method
+
+- func: need_prefech(Tensor self) -> bool
+  variants: method
+
+- func: get_pointer(Tensor self) -> int
+  variants: method
+
 # DEPRECATED. DO NOT USE
 - func: _cast_Byte(Tensor self, bool non_blocking=False) -> Tensor
   variants: function
@@ -455,6 +483,7 @@
     MkldnnCPU: mkldnn_add
     ZeroTensor: add_zerotensor
     NestedTensorCPU, NestedTensorCUDA: NestedTensor_add_Tensor
+    Checkpoint: checkpoint_add
 
 - func: add_.Tensor(Tensor(a!) self, Tensor other, *, Scalar alpha=1) -> Tensor(a!)
   device_check: NoCheck   # TensorIterator
@@ -513,6 +542,7 @@
   variants: function, method
   dispatch:
     CompositeExplicitAutograd: add
+    # Checkpoint: checkpoint_add
 
 - func: add_.Scalar(Tensor(a!) self, Scalar other, Scalar alpha=1) -> Tensor(a!)
   device_check: NoCheck   # TensorIterator
@@ -1125,6 +1155,7 @@
   dispatch:
     SparseCPU, SparseCUDA: cat_sparse
     QuantizedCPU: cat_quantized_cpu
+    Checkpoint: checkpoint_cat
 
 - func: cat.out(Tensor[] tensors, int dim=0, *, Tensor(a!) out) -> Tensor(a!)
   structured: True
@@ -1135,7 +1166,8 @@
     CUDA: cat_out_cuda
     MPS: cat_out_mps
     QuantizedCPU: cat_out_quantized_cpu
-
+    Checkpoint: checkpoint_cat_out
+    
 - func: cat.names(Tensor[] tensors, Dimname dim) -> Tensor
 
 - func: cat.names_out(Tensor[] tensors, Dimname dim, *, Tensor(a!) out) -> Tensor(a!)
@@ -4068,7 +4100,8 @@
   dispatch:
     CompositeExplicitAutograd: select
     SparseCsrCPU, SparseCsrCUDA: select_sparse_csr
-
+    Checkpoint: checkpoint_select
+    
 - func: select_backward(Tensor grad_output, int[] input_sizes, int dim, int index) -> Tensor
   variants: function
   device_check: NoCheck
@@ -4297,6 +4330,7 @@
   device_guard: False
   dispatch:
     CompositeExplicitAutograd: slice
+    Checkpoint: checkpoint_slice
 
 - func: slice_backward(Tensor grad_output, int[] input_sizes, int dim, int start, int end, int step) -> Tensor
   variants: function

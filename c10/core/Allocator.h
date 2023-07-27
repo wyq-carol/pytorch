@@ -160,6 +160,9 @@ struct C10_API Allocator {
   virtual DeleterFnPtr raw_deleter() const {
     return nullptr;
   }
+  // c10::EntityStorageImpl* as_entity(c10::StorageImpl* storage) {
+  //   return nullptr;
+  // }
   void* raw_allocate(size_t n) {
     auto dptr = allocate(n);
     AT_ASSERT(dptr.get() == dptr.get_context());

@@ -518,7 +518,28 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
   TensorImpl& operator=(const TensorImpl&) = delete;
   TensorImpl(TensorImpl&&) = delete;
   TensorImpl& operator=(TensorImpl&&) = delete;
+  
+  /**
+   *  
+   */
+  bool allow_remateriazation() const {
+    return allow_remateriazation_;
+  }
 
+  /**
+   *  
+   */
+  void enable_remateriazation() {
+    allow_remateriazation_ = true;
+  }
+
+  /**
+   *  
+   */
+  void disable_remateriazation() {
+    allow_remateriazation_ = false;
+  }
+  
   /**
    * Release (decref) storage, and any other external allocations.  This
    * override is for `intrusive_ptr_target` and is used to implement weak
@@ -902,6 +923,10 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
     TORCH_CHECK(device_opt_.has_value(), "tensor does not have a device");
     // See NOTE [c10::optional operator usage in CUDA]
     return *device_opt_;
+  }
+
+  c10::optional<c10::Device> optional_device() const {
+    return device_opt_;
   }
 
   Layout layout() const {
@@ -1492,6 +1517,9 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
    * compatible with SparseCUDA.
    */
   inline bool has_compatible_shallow_copy_type(DispatchKeySet from) {
+    // if (key_set_.has(DispatchKey::Checkpoint) || from.has(DispatchKey::Checkpoint)) 
+    //   return key_set_ == from; // wyq
+    
     auto is_dense = [](DispatchKeySet ts) {
       constexpr auto dense_backends = DispatchKeySet(
           {BackendComponent::CPUBit,
@@ -2423,6 +2451,9 @@ struct C10_API TensorImpl : public c10::intrusive_ptr_target {
   // INVARIANT: named_tensor_meta_ != nullptr  <==>
   // key_set_.has(DispatchKey::Named)
   DispatchKeySet key_set_;
+
+  // Identifies that content of Tensor was get by operator (can be enableriazation) 
+  bool allow_remateriazation_;
 
  private:
   // C10_TensorImpl_Size_Check_Dummy_Class needs to be friends with

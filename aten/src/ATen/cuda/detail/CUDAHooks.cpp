@@ -17,6 +17,8 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/util/irange.h>
 
+#include <ATen/cuda/CachingHostAllocator.h>
+
 #if AT_CUDNN_ENABLED()
 #include <ATen/cudnn/cudnn-wrapper.h>
 #endif
@@ -63,7 +65,8 @@ void CUDAHooks::initCUDA() const {
   at::vitals::VitalsAPI.setVital("CUDA", "used", "true", /* force = */ true);
 
   const auto num_devices = c10::cuda::device_count_ensure_non_zero();
-  c10::cuda::CUDACachingAllocator::init(num_devices);
+  c10::cuda::CUDACachingAllocator::init(num_devices, at::cuda::getCachingHostAllocator());
+
   at::cuda::detail::init_p2p_access_cache(num_devices);
 
 #if AT_MAGMA_ENABLED()

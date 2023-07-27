@@ -123,7 +123,7 @@ C10_CUDA_API void* raw_alloc_with_stream(size_t nbytes, cudaStream_t stream);
 C10_CUDA_API void raw_delete(void* ptr);
 
 C10_CUDA_API Allocator* get();
-C10_CUDA_API void init(int device_count);
+C10_CUDA_API void init(int device_count, c10::Allocator* host_allocator); // wyq
 C10_CUDA_API void setMemoryFraction(double fraction, int device);
 C10_CUDA_API void emptyCache();
 C10_CUDA_API void cacheInfo(
@@ -144,6 +144,13 @@ C10_CUDA_API void notifyCaptureBegin(
     MempoolId_t mempool_id);
 C10_CUDA_API void notifyCaptureEnd(int device, CaptureId_t graph_id);
 C10_CUDA_API void notifyCaptureDestroy(int device, MempoolId_t mempool_id);
+
+// wyq
+C10_CUDA_API void createSwapEnv();
+C10_CUDA_API void closeSwapEnv();
+C10_CUDA_API void prefetchInit();
+C10_CUDA_API void prefetchAll();
+C10_CUDA_API void beforPrefetchWaitAll();
 
 C10_CUDA_API std::mutex* getFreeMutex();
 

@@ -48,6 +48,13 @@ static cudaStream_t low_priority_streams[C10_COMPILE_TIME_MAX_GPUS]
 static cudaStream_t high_priority_streams[C10_COMPILE_TIME_MAX_GPUS]
                                          [kStreamsPerPool];
 
+
+// ATM streams
+static constexpr unsigned int kAutoMemFlags = cudaStreamNonBlocking;
+static std::once_flag atm_device_flags[C10_COMPILE_TIME_MAX_GPUS];
+static std::atomic<uint32_t> atm_counters[C10_COMPILE_TIME_MAX_GPUS];
+static cudaStream_t atm_streams[C10_COMPILE_TIME_MAX_GPUS][kStreamsPerPool];
+
 // Note [StreamId assignment]
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~
 // How do we assign stream IDs?
@@ -84,6 +91,7 @@ enum class StreamIdType : uint8_t {
   LOW = 0x1,
   HIGH = 0x2,
   EXT = 0x3,
+  ATM = 0x4,
 };
 
 std::ostream& operator<<(std::ostream& stream, StreamIdType s) {
@@ -100,6 +108,9 @@ std::ostream& operator<<(std::ostream& stream, StreamIdType s) {
     case StreamIdType::EXT:
       stream << "EXT";
       break;
+    case StreamIdType::ATM:
+      stream << "ATM";
+      break;  
     default:
       stream << static_cast<uint8_t>(s);
       break;
@@ -170,6 +181,21 @@ static void initDeviceStreamState(DeviceIndex device_index) {
   high_priority_counters[device_index] = 0;
 }
 
+// Creates the ATM stream pools for the specified device
+// Warning: only call once per device!
+static void initDeviceAutoMemStreamState(DeviceIndex device_index) {
+  // Switches to the requested device so streams are properly associated
+  // with it.
+  CUDAGuard device_guard{device_index};
+
+  for (const auto i : c10::irange(kStreamsPerPool)) {
+    auto& stream = atm_streams[device_index][i];
+
+    C10_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, kAutoMemFlags));
+  }
+  atm_counters[device_index] = 0;
+}
+
 // Init front-end to ensure initialization only occurs once
 static void initCUDAStreamsOnce() {
   // Inits default streams (once, globally)
@@ -184,6 +210,11 @@ static void initCUDAStreamsOnce() {
   for (const auto i : c10::irange(num_gpus)) {
     current_streams[i] = makeStreamId(StreamIdType::DEFAULT, 0);
   }
+}
+
+static void initAutoMemStreamsOnce(DeviceIndex device_index) {
+  // Inits default streams (once, globally)
+  std::call_once(atm_device_flags[device_index], initDeviceAutoMemStreamState, device_index);
 }
 
 // Helper to verify the GPU index is valid
@@ -233,6 +264,8 @@ cudaStream_t CUDAStream::stream() const {
       return high_priority_streams[device_index][si];
     case StreamIdType::EXT:
       return reinterpret_cast<cudaStream_t>(stream_id);
+    case StreamIdType::ATM:
+      return atm_streams[device_index][si];
     default:
       TORCH_INTERNAL_ASSERT(
           0,
@@ -296,6 +329,22 @@ CUDAStream getCurrentCUDAStream(DeviceIndex device_index) {
 void setCurrentCUDAStream(CUDAStream stream) {
   initCUDAStreamsOnce();
   current_streams[stream.device_index()] = stream.id();
+}
+
+CUDAStream getCustomCUDAStream(DeviceIndex device_index) {
+  initCUDAStreamsOnce();
+  if (device_index == -1)
+    device_index = current_device();
+  check_gpu(device_index);
+  
+  initAutoMemStreamsOnce(device_index);
+  const auto stream_id = get_idx(atm_counters[device_index]);
+  return CUDAStream(
+      CUDAStream::UNCHECKED,
+      Stream(
+          Stream::UNSAFE,
+          c10::Device(DeviceType::CUDA, device_index),
+          makeStreamId(StreamIdType::ATM, stream_id)));
 }
 
 std::ostream& operator<<(std::ostream& stream, const CUDAStream& s) {

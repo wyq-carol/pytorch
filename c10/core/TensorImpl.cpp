@@ -8,6 +8,8 @@
 #include <c10/util/Optional.h>
 #include <c10/util/irange.h>
 
+#include <c10/cuda/ATMConfig.h>
+
 C10_DEFINE_bool(
     caffe2_keep_on_shrink,
     true,
@@ -69,7 +71,10 @@ void TensorImpl::_set_fw_grad(
 }
 
 // some compiler does not generate the destructor correctly
-TensorImpl::~TensorImpl() = default;
+TensorImpl::~TensorImpl() = default; 
+// {
+  // if (storage_.unsafeGetStorageImpl() != nullptr && storage_.unsafeGetStorageImpl()->atm_enabled()) printf("TensorImpl::FreeMemory(%ld)\n", storage_.unsafeGetStorageImpl()->entity().impl_->entity_id_);
+// }
 
 TensorImpl::TensorImpl(
     Storage&& storage,
@@ -118,6 +123,8 @@ TensorImpl::TensorImpl(
   if (!is_inference()) {
     version_counter_ = VariableVersion(/*version=*/0);
   }
+  // auto impl_profile_ = c10::cuda::get_impl_profile();
+  // impl_profile_->tensorLifeStart(this);
 }
 
 TensorImpl::TensorImpl(
@@ -180,6 +187,9 @@ TensorImpl::TensorImpl(
 
   // we would also like to check that non-cpu devices have an index, but some
   // Caffe2 operators create Storages with default devices.
+
+  // auto impl_profile_ = c10::cuda::get_impl_profile();
+  // impl_profile_->tensorLifeStart(this);
 }
 
 void TensorImpl::HandleResize() {
@@ -322,6 +332,7 @@ bool TensorImpl::compute_non_overlapping_and_dense() const {
 void TensorImpl::release_resources() {
   autograd_meta_.reset();
   if (storage_) {
+    // if (storage_.unsafeGetStorageImpl() != nullptr && storage_.unsafeGetStorageImpl()->atm_enabled()) printf("TensorImpl::release_resources(%ld)\n", storage_.unsafeGetStorageImpl()->entity().impl_->entity_id_);
     storage_ = {};
   }
   if (owns_pyobj()) {
@@ -775,5 +786,42 @@ AutogradMetaFactory* GetAutogradMetaFactory() {
 }
 
 } // namespace impl
+namespace cuda {
+
+void ImplProfile::tensorLifeStart(const c10::TensorImpl* tensor_ptr) {
+  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  // const void *data_ptr = tensor_ptr->data();
+  tensor_profile_.insert(
+    std::make_pair(reinterpret_cast<uint64_t>(tensor_ptr), 
+    ImplProfileEl{
+      0,
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(),
+      0,
+      0,
+      {}
+    })
+  );
+  return;
+}
+void ImplProfile::tensorLifeEnds(const c10::TensorImpl* tensor_ptr) {
+  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  tensor_profile_[reinterpret_cast<uint64_t>(tensor_ptr)].life_end_ = 
+    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  return;
+}
+void ImplProfile::tensorSetStorage(const c10::TensorImpl* tensor_ptr) {
+  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  tensor_profile_[reinterpret_cast<uint64_t>(tensor_ptr)].data_ptr_ = reinterpret_cast<uint64_t>(tensor_ptr->data());
+  tensor_profile_[reinterpret_cast<uint64_t>(tensor_ptr)].size_ = tensor_ptr->storage().nbytes();
+  return;
+}
+
+static ATMDebugLog debug_logger;  
+ATMDebugLog* get_debug_log() { return &debug_logger; }
+
+static ImplProfile impl_profile;
+ImplProfile* get_impl_profile() { return &impl_profile; }
+
+} // namespace cuda
 
 } // namespace c10
