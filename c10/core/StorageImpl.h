@@ -5,6 +5,11 @@
 
 #include <c10/util/intrusive_ptr.h>
 
+#include <c10/core/ATMCommon.h>
+#include <c10/core/EntityStorageImpl.h>
+
+#include <c10/cuda/ATMConfig.h>
+
 namespace c10 {
 
 // A storage represents the underlying backing data buffer for a
@@ -44,7 +49,18 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
         size_bytes_(size_bytes),
         resizable_(resizable),
         received_cuda_(false),
-        allocator_(allocator) {
+        allocator_(allocator),
+        entity_(allocator ? allocator->as_entity(this) : nullptr) {
+    #ifdef ATM_DEBUG_1
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::constructor", 
+                                    "Pre Allocated DataPtr Device: " + device().str());
+    #endif
+    #ifdef ATM_DEBUG_2
+    auto impl_profile_ = c10::cuda::get_impl_profile();
+    impl_profile_->storageLifeStart(this);
+    impl_profile_->storageSetStorage(this, data_ptr_.get(), nbytes());
+    #endif
     if (resizable) {
       TORCH_INTERNAL_ASSERT(
           allocator_, "For resizable storage, allocator must be provided");
@@ -61,14 +77,32 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
             size_bytes,
             allocator->allocate(size_bytes),
             allocator,
-            resizable) {}
+            resizable) {
+    #ifdef ATM_DEBUG_1
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::constructor", 
+                                    "No Pre Allocated DataPtr Device: " + device().str());
+    #endif
+    #ifdef ATM_DEBUG_2
+    c10::cuda::get_impl_profile()->storageLifeStart(this);
+    #endif
+  }
 
   StorageImpl& operator=(StorageImpl&& other) = default;
   StorageImpl& operator=(const StorageImpl&) = delete;
   StorageImpl() = delete;
-  StorageImpl(StorageImpl&& other) = default;
+  StorageImpl(StorageImpl&& other) : entity_(other.entity_) {
+    #ifdef ATM_DEBUG_1
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::constructor", 
+                                    "No Pre Allocated (From Other) DataPtr Device: " + device().str());
+    #endif
+    // #ifdef ATM_DEBUG_2
+    // c10::cuda::get_impl_profile()->storageLifeStart(this);
+    // #endif
+  }
   StorageImpl(const StorageImpl&) = delete;
-  ~StorageImpl() override = default;
+  ~StorageImpl() override;
 
   void reset() {
     data_ptr_.clear();
@@ -77,17 +111,31 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
 
   template <typename T>
   inline T* data() const {
+    #ifdef ATM_ENSURE_DATA
+    if (atm_enabled()) entity_.impl_->ensure_data();
+    #endif
+    #ifdef ATM_DEBUG_1
+    T x_;
+    const char* type_name = typeid(x_).name();
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::data"+ std::string(type_name) +"(const)", 
+                                    "Accessed Data");
+    #endif
+    #ifdef ATM_DEBUG_2
+    c10::cuda::get_impl_profile()->storageAppendAccess(this);
+    #endif
     return unsafe_data<T>();
   }
 
   template <typename T>
   inline T* unsafe_data() const {
+    #ifdef ATM_ENSURE_DATA
+    if (atm_enabled()) entity_.impl_->ensure_data();
+    #endif
     return static_cast<T*>(this->data_ptr_.get());
   }
 
-  void release_resources() override {
-    data_ptr_.clear();
-  }
+  void release_resources() override;
 
   size_t nbytes() const {
     return size_bytes_;
@@ -103,10 +151,16 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
   };
 
   at::DataPtr& data_ptr() {
+    #ifdef ATM_ENSURE_DATA
+    if (atm_enabled()) entity_.impl_->ensure_data();
+    #endif
     return data_ptr_;
   };
 
   const at::DataPtr& data_ptr() const {
+    #ifdef ATM_ENSURE_DATA
+    if (atm_enabled()) entity_.impl_->ensure_data();
+    #endif
     return data_ptr_;
   };
 
@@ -114,6 +168,15 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
   at::DataPtr set_data_ptr(at::DataPtr&& data_ptr) {
     at::DataPtr old_data_ptr(std::move(data_ptr_));
     data_ptr_ = std::move(data_ptr);
+    #ifdef ATM_DEBUG_1
+    // printf("Set DataPtr Device: %s\n", device().str().c_str());
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::set_data_ptr", 
+                                    "Set DataPtr Device: " + device().str());
+    #endif
+    #ifdef ATM_DEBUG_2
+    c10::cuda::get_impl_profile()->storageSetStorage(this, data_ptr_.get(), nbytes());
+    #endif
     return old_data_ptr;
   };
 
@@ -123,10 +186,32 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
 
   // TODO: Return const ptr eventually if possible
   void* data() {
+    #ifdef ATM_ENSURE_DATA
+    if (atm_enabled()) entity_.impl_->ensure_data();
+    #endif
+    #ifdef ATM_DEBUG_1
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::data",
+                                    "Accessed Data");
+    #endif
+    #ifdef ATM_DEBUG_2
+    c10::cuda::get_impl_profile()->storageAppendAccess(this);
+    #endif
     return data_ptr_.get();
   }
 
   void* data() const {
+    #ifdef ATM_ENSURE_DATA
+    if (atm_enabled()) entity_.impl_->ensure_data();
+    #endif
+    #ifdef ATM_DEBUG_1
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::data_ptr(const)",
+                                    "Accessed Data");
+    #endif
+    #ifdef ATM_DEBUG_2
+    c10::cuda::get_impl_profile()->storageAppendAccess(this);
+    #endif
     return data_ptr_.get();
   }
 
@@ -135,10 +220,21 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
   }
 
   at::Allocator* allocator() {
+    #ifdef ATM_DEBUG_1
+    // printf("Used Allocator Once\n");
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::allocator", 
+                                    "Used Allocator Once");
+    #endif
     return allocator_;
   }
 
   const at::Allocator* allocator() const {
+    #ifdef ATM_DEBUG_1
+    c10::cuda::get_debug_log()->add_debug(c10::cuda::ATMLogLevel::DEBUG, 
+                                    "StorageImpl::allocator(const)", 
+                                    "Used Allocator Once");
+    #endif
     return allocator_;
   };
 
@@ -195,13 +291,45 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     return received_cuda_;
   }
 
- private:
+  // manual method should be deprecated other than debug   
+  void pageout_manual();
+  void pagein_manual();
+  void need_prefetch();
+  
+  bool atm_enabled() const { return entity_.impl_.get() != nullptr; }
+ 
+  EntityStorageRef& entity() {
+    return entity_;
+  }
+
   DataPtr data_ptr_;
+ private:
   size_t size_bytes_;
   bool resizable_;
   // Identifies that Storage was received from another process and doesn't have
   // local to process cuda memory allocation
   bool received_cuda_;
+
   Allocator* allocator_;
+
+  EntityStorageRef entity_;
 };
+
+inline const c10::Allocator* EntityStorageImpl::allocator() const {
+  return storage_->allocator();
+}
+inline size_t EntityStorageImpl::capacity() const {
+  return storage_->nbytes();
+}
+inline void* EntityStorageImpl::device_ptr() const {
+  return storage_->data_ptr_.get();
+}
+inline c10::Device EntityStorageImpl::device() const {
+  return storage_->device();
+}
+inline c10::DataPtr EntityStorageImpl::set_device_ptr(c10::DataPtr&& data_ptr) {
+  std::swap(storage_->data_ptr_, data_ptr);
+  return std::move(data_ptr);
+}
+
 } // namespace c10

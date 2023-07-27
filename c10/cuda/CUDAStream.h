@@ -236,6 +236,11 @@ TORCH_API CUDAStream getCurrentCUDAStream(DeviceIndex device_index = -1);
  */
 TORCH_API void setCurrentCUDAStream(CUDAStream stream);
 
+/**
+ * Get a new stream from the CUDA stream pool for Automem.
+ */
+TORCH_API CUDAStream getCustomCUDAStream(DeviceIndex device = -1);
+
 C10_API std::ostream& operator<<(std::ostream& stream, const CUDAStream& s);
 
 } // namespace cuda

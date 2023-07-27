@@ -186,6 +186,10 @@ auto PyNode::name() const -> std::string {
   return name;
 }
 
+// auto PyNode::getuid() const -> int32_t {
+//   return self_id_;
+// }
+
 }} // namespace torch::autograd
 
 // Traverse and clear are required for supporting Python's GC cycle handling.
@@ -937,6 +941,22 @@ PyObject *THPFunction_metadata(THPFunction *self, void *_unused)
   END_HANDLE_TH_ERRORS
 }
 
+PyObject *THPFunction_fn_uid(THPFunction *self, void *_unused)
+{
+  HANDLE_TH_ERRORS
+  auto cdata = self->cdata.lock();
+  TORCH_CHECK(cdata,
+    "You attempted to access the uid of a custom autograd function "
+    "but the underlying PyNode has already been deallocated.  The most likely "
+    "reason this occurred is because you assigned x.grad_fn to a local variable "
+    "and then let the original variable get deallocated.  Don't do that!  If "
+    "you really have no way of restructuring your code so this is the case, "
+    "please file an issue reporting that you are affected by this."); 
+  auto uid = THPUtils_packInt32(cdata->self_id_);
+  return uid;
+  END_HANDLE_TH_ERRORS
+}
+
 typedef PyObject *(*getter)(PyObject *, void *);
 typedef int (*setter)(PyObject *, PyObject *, void *);
 
@@ -997,6 +1017,7 @@ static struct PyGetSetDef THPFunction_properties[] = {
   {"requires_grad", getRequiresGrad, nullptr, nullptr, nullptr},
   {"metadata", (getter)THPFunction_metadata, nullptr, nullptr, nullptr},
   {"materialize_grads", nullptr, (setter)THPFunction_set_materialize_grads, nullptr, nullptr},
+  {"fn_uid", (getter)THPFunction_fn_uid, nullptr, nullptr, nullptr},
   {nullptr}
 };
 

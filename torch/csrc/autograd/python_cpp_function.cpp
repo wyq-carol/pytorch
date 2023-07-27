@@ -160,6 +160,12 @@ PyObject* THPCppFunction_name(PyObject* self, PyObject *noargs) {
   return THPUtils_packString(fn.name());
 }
 
+PyObject* THPCppFunction_fn_uid(THPCppFunction* self, void *_unused) {
+  auto uid = THPUtils_packInt32(self->cdata->self_id_);
+  return uid;
+}
+
+
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,cppcoreguidelines-avoid-non-const-global-variables,modernize-avoid-c-arrays)
 static struct PyMethodDef default_methods[] = {
   THP_FUNCTION_DEFAULT_METHODS,

@@ -22,21 +22,26 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cstdint>
 
 C10_CLANG_DIAGNOSTIC_PUSH()
 #if C10_CLANG_HAS_WARNING("-Wshorten-64-to-32")
 C10_CLANG_DIAGNOSTIC_IGNORE("-Wshorten-64-to-32")
 #endif
 
+// extern int32_t global_fn_uid_count;
+
 namespace torch { namespace autograd {
 
 struct Edge;
+struct Node;
 struct FunctionPostHook;
 struct FunctionPreHook;
 
 using tensor_list = std::vector<at::Tensor>;
 using variable_list = std::vector<Variable>;
 using edge_list = std::vector<Edge>;
+using node_list = std::vector<std::shared_ptr<Node>>;
 using saved_variable_list = std::vector<SavedVariable>;
 using IndexRange = std::pair<size_t, size_t>;
 
@@ -102,34 +107,74 @@ class NodeGuard {
 // guarantees* w.r.t. the ordering of `C` relative to `A` or `B`.
 // See NOTE [ Sequence Number] for more details on the usages of sequence number.
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// struct TORCH_API multiple_inputs : std::enable_shared_from_this<multiple_inputs> {
+//     std::vector<at::Tensor> input_tensors;
+//     //std::vector<int> com_and_trans;
+//     //std::vector<std::function<at::Tensor(const at::Tensor&)>> func 
+//     std::vector<std::shared_ptr<Node>> pre_nodes;
+//     //std::vector<c10::StorageImpl*> storage_impl_s;
+//     //std::vector<c10::DataPtr> dataptrs;
+//     struct timeval start_, end_;
+// };
+
+
+
 struct TORCH_API Node : std::enable_shared_from_this<Node> {
  public:
+  /// Properties Added By HOME
+  int32_t self_id_ = -1;
+  c10::StorageImpl* storage_impl_ = nullptr;
+  int32_t self_policy_ = 0;
+
+  bool is_cat_ = false; // Not used
+  std::vector<int32_t> id_prenodes_;
+  node_list prenodes_;
+  tensor_list input_tensors_;
+  int32_t operation = 1;
+  /// IDK Maybe Added by CSWAP
+  int32_t dim_size_;
+  int32_t block_size_;
+  std::function<at::Tensor(const at::Tensor&)> func_; // forward function
+  std::function<at::Tensor()> forwardfunc_; 
+
+  std::shared_ptr<Node> getptr() { return shared_from_this(); }
+
   /// Construct a new `Node` with the given `next_edges`
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
-  explicit Node(
+    explicit Node(
+      uint64_t sequence_nr);
+    
+    explicit Node(
       uint64_t sequence_nr,
-      edge_list&& next_edges = edge_list())
-      : sequence_nr_(sequence_nr),
-      next_edges_(std::move(next_edges)) {
+      edge_list && next_edges);
 
-    for (const Edge& edge: next_edges_) {
-      update_topological_nr(edge);
-    }
+  // explicit Node(
+  //     uint64_t sequence_nr,
+  //     edge_list&& next_edges= edge_list())
+  //     : sequence_nr_(sequence_nr),
+  //     next_edges_(std::move(next_edges)) {
+  //   // set id global
+  //   self_id_ = global_fn_uid_count++;
 
-    if (AnomalyMode::is_enabled()) {
-      metadata()->store_stack();
+  //   for (const Edge& edge: next_edges_) {
+  //     update_topological_nr(edge);
+  //   }
 
-      // If anomaly mode is enabled and graph is constructed, then assign the
-      // currently evaluating node as the parent of this node.
-      // A parent is a Node where this Node is created.
-      // We are tracking the parents to track multiple backward operations.
-      assign_parent();
-    }
+  //   if (AnomalyMode::is_enabled()) {
+  //     metadata()->store_stack();
 
-    // Store the thread_id of the forward operator.
-    // See NOTE [ Sequence Numbers ]
-    thread_id_ = at::RecordFunction::currentThreadId();
-  }
+  //     // If anomaly mode is enabled and graph is constructed, then assign the
+  //     // currently evaluating node as the parent of this node.
+  //     // A parent is a Node where this Node is created.
+  //     // We are tracking the parents to track multiple backward operations.
+  //     assign_parent();
+  //   }
+
+  //   // Store the thread_id of the forward operator.
+  //   // See NOTE [ Sequence Numbers ]
+  //   thread_id_ = at::RecordFunction::currentThreadId();
+  // }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   explicit Node(edge_list&& next_edges = edge_list())

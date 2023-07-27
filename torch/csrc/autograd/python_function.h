@@ -30,7 +30,7 @@ struct PyNode : public Node {
   void release_variables() override;
   std::string name() const override;
   bool is_traceable() override;
-
+  // int32_t getuid() const override;
   // THPFunction this Function is wrapping.  Owning!
   PyObject* obj;
 

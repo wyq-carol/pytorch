@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+static int32_t global_fn_uid_count = 0;
+
 namespace torch { namespace autograd {
 
 // The current evaluating node. This is useful to assign the current node as a
@@ -29,6 +31,59 @@ NodeGuard::NodeGuard(std::shared_ptr<Node> node) {
 NodeGuard::~NodeGuard() {
   // restore the previous evaluating node
   current_evaluating_node = std::move(last_evaluating_node_);
+}
+
+Node::Node(uint64_t sequence_nr)
+      : sequence_nr_(sequence_nr) {
+  // set id global
+  next_edges_ = edge_list();
+
+  self_id_ = global_fn_uid_count++;
+
+  for (const Edge& edge: next_edges_) {
+    update_topological_nr(edge);
+  }
+
+  if (AnomalyMode::is_enabled()) {
+    metadata()->store_stack();
+
+    // If anomaly mode is enabled and graph is constructed, then assign the
+    // currently evaluating node as the parent of this node.
+    // A parent is a Node where this Node is created.
+    // We are tracking the parents to track multiple backward operations.
+    assign_parent();
+  }
+
+  // Store the thread_id of the forward operator.
+  // See NOTE [ Sequence Numbers ]
+  thread_id_ = at::RecordFunction::currentThreadId();
+}
+
+Node::Node(
+      uint64_t sequence_nr,
+      edge_list&& next_edges)
+      : sequence_nr_(sequence_nr),
+      next_edges_(std::move(next_edges)) {
+  // set id global
+  self_id_ = global_fn_uid_count++;
+
+  for (const Edge& edge: next_edges_) {
+    update_topological_nr(edge);
+  }
+
+  if (AnomalyMode::is_enabled()) {
+    metadata()->store_stack();
+
+    // If anomaly mode is enabled and graph is constructed, then assign the
+    // currently evaluating node as the parent of this node.
+    // A parent is a Node where this Node is created.
+    // We are tracking the parents to track multiple backward operations.
+    assign_parent();
+  }
+
+  // Store the thread_id of the forward operator.
+  // See NOTE [ Sequence Numbers ]
+  thread_id_ = at::RecordFunction::currentThreadId();
 }
 
 void Node::assign_parent() {

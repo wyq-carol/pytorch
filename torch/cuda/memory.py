@@ -12,7 +12,8 @@ __all__ = ["caching_allocator_alloc", "caching_allocator_delete", "set_per_proce
            "reset_peak_memory_stats", "reset_max_memory_allocated", "reset_max_memory_cached",
            "memory_allocated", "max_memory_allocated", "memory_reserved", "max_memory_reserved",
            "memory_cached", "max_memory_cached", "memory_snapshot", "memory_summary", "list_gpu_processes",
-           "mem_get_info"]
+           "mem_get_info", "get_debug_atm", "clear_debug_atm", "get_storageimpl_profile", "clear_storageimpl_profile",
+           "prefetch_init", "prefetch_all", "before_prefetch_wait_all", "create_swap_env", "close_swap_env"]
 
 def _host_allocator():
     _lazy_init()
@@ -590,3 +591,33 @@ def mem_get_info(device: Union[Device, int] = None) -> int:
         device = torch.cuda.current_device()
     device = _get_device_index(device)
     return torch.cuda.cudart().cudaMemGetInfo(device)
+
+def get_debug_atm():
+    r"""Returns the debug infomation ATM"""
+    return torch._C._cuda_getDebugATM()
+def clear_debug_atm():
+    r"""clear the debug infomation ATM"""
+    return torch._C._cuda_clearDebugATM()
+def get_storageimpl_profile():
+    r"""Returns the impl profile infomation ATM"""
+    return torch._C._cuda_getStorageImplProfileATM()
+
+def clear_storageimpl_profile():
+    r"""clear the impl profile infomation ATM"""
+    return torch._C._cuda_clearStorageImplProfileATM()
+
+def create_swap_env():
+    return torch._C._cuda_createSwapEnv()
+def close_swap_env():
+    return torch._C._cuda_closeSwapEnv()
+
+
+def prefetch_init():
+    r"""prefetch init"""
+    return torch._C._cuda_prefetchInit()
+def prefetch_all():
+    r"""prefetch all storage"""
+    return torch._C._cuda_prefetchAll()
+def before_prefetch_wait_all():
+    r"""wait all transfer done"""
+    return torch._C._cuda_beforPrefetchWaitAll()

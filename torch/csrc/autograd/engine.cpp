@@ -22,6 +22,17 @@
 #include <c10/util/ThreadLocal.h>
 #include <c10/core/StreamGuard.h>
 
+/// ADDED BY HOME
+// #include<c10/core/PolicyMaker.h>
+#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/core/StorageImpl.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <ATen/native/Copy.h>
+#include <ATen/NativeFunctions.h>
+#include <ATen/Dispatch.h>
+#include <ATen/core/grad_mode.h>
+
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -37,6 +48,11 @@
 #include <typeinfo>
 #include <sstream>
 #include <queue>
+
+#include <cstdio>
+#include <chrono>
+
+#include <torch/csrc/autograd/profiler_amem.h>
 
 namespace torch { namespace autograd {
 
@@ -747,14 +763,52 @@ void validate_outputs(
   }
 }
 
+static void pre_call_function(
+  // std::shared_ptr<GraphTask>& graph_task,
+  Node *func) {
+  if (func == nullptr) return;
+  for (auto i = 0; i < func->prenodes_.size(); ++i) {
+    if (func->prenodes_[i] == nullptr) continue;
+    if (func->prenodes_[i]->self_policy_ <= 0) continue;
+    if (func->prenodes_[i]->self_policy_ == 1) {
+      pre_call_function(func->prenodes_[i].get());
+      std::shared_ptr<Node> pre_func = func->prenodes_[i]->getptr();
+      at::GradMode::set_enabled(false);
+      at::Tensor tensor_;
+      if (pre_func->prenodes_.size() > 1) {
+        if (pre_func->operation == 2)
+          tensor_ = at::add(pre_func->input_tensors_[0], pre_func->input_tensors_[1]);
+        else
+          tensor_ = at::cat(pre_func->input_tensors_, 1);
+      } else {
+        tensor_ = (pre_func->func_)(pre_func->input_tensors_[0]);
+      }
+      cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream());
+      at::GradMode::set_enabled(true);
+      std::swap(pre_func->storage_impl_->data_ptr(),tensor_.unsafeGetTensorImpl()->storage().unsafeGetStorageImpl()->data_ptr());
+      pre_func->self_policy_ = -1;
+    }
+    // else 
+  }
+}
+
 static variable_list call_function(
     std::shared_ptr<GraphTask>& graph_task,
     Node* func,
     InputBuffer& inputBuffer) {
+  
   CheckpointValidGuard cpvguard(graph_task);
   auto& fn = *func;
   auto inputs =
       call_pre_hooks(fn, InputBuffer::variables(std::move(inputBuffer)));
+  // printf("tensor entity: ");
+  // for (auto ii = 0; ii <  inputs.size(); ii++)
+    // printf("%ld", reinterpret_cast<int64_t>(inputs[ii].unsafeGetTensorImpl()->storage().unsafeGetStorageImpl()->data()));//entity().impl_->entity_id_);
+  // printf("\n");
+  // fflush(stdout);
+
+  // pre_call_function(func);
+
 
   if (!graph_task->keep_graph_) {
     fn.will_release_variables();
@@ -763,6 +817,8 @@ static variable_list call_function(
   const auto has_post_hooks = !fn.post_hooks().empty();
   variable_list outputs;
 
+  // grad function execution, will profile here
+  auto start_grad_exe_time = std::chrono::high_resolution_clock::now();
   if (has_post_hooks) {
     // In functions/accumulate_grad.cpp, there is some logic to check the
     // conditions under which the incoming gradient can be stolen directly
@@ -784,7 +840,11 @@ static variable_list call_function(
   } else {
     outputs = fn(std::move(inputs));
   }
-
+  auto elapsed_grad_exe_time = std::chrono::high_resolution_clock::now() - start_grad_exe_time;
+  int32_t elapsed_grad_exe_microseconds = 
+    std::chrono::duration_cast<std::chrono::microseconds>(elapsed_grad_exe_time).count();
+  torch::automem::GetAutoMemProfiler()->grad_execution_time[fn.self_id_] = elapsed_grad_exe_microseconds;
+  
   validate_outputs(fn.next_edges(), outputs, [&](const std::string& msg) {
     std::ostringstream ss;
     ss << "Function "  << fn.name() << " returned an " << msg;
@@ -834,7 +894,7 @@ void Engine::evaluate_function(
       return;
     }
   }
-
+  
   auto outputs = call_function(graph_task, func, inputs);
 
   auto& fn = *func;

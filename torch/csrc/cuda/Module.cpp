@@ -8,6 +8,7 @@
 #include <ATen/cuda/Sleep.h>
 #include <ATen/cuda/detail/CUDAHooks.h>
 #include <ATen/cuda/jiterator.h>
+#include <c10/cuda/ATMConfig.h>
 #ifdef USE_NCCL
 #include <torch/csrc/cuda/python_nccl.h>
 #endif
@@ -509,6 +510,98 @@ PyObject * THCPModule_memorySnapshot(PyObject *_unused, PyObject *noargs)
   END_HANDLE_TH_ERRORS
 }
 
+// NOTE Add Here
+
+PyObject * THCPModule_createSwapEnv(PyObject *_unused, PyObject *noargs)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::CUDACachingAllocator::createSwapEnv();
+  END_HANDLE_TH_ERRORS
+  Py_RETURN_NONE;
+}
+PyObject * THCPModule_closeSwapEnv(PyObject *_unused, PyObject *noargs)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::CUDACachingAllocator::closeSwapEnv();
+  END_HANDLE_TH_ERRORS
+  Py_RETURN_NONE;
+}
+PyObject * THCPModule_prefetchInit(PyObject *_unused, PyObject *noargs)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::CUDACachingAllocator::prefetchInit();
+  END_HANDLE_TH_ERRORS
+  Py_RETURN_NONE;
+}
+
+PyObject * THCPModule_prefetchAll(PyObject *_unused, PyObject *noargs)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::CUDACachingAllocator::prefetchAll();
+  END_HANDLE_TH_ERRORS
+  Py_RETURN_NONE;
+}
+
+PyObject * THCPModule_beforPrefetchWaitAll(PyObject *_unused, PyObject *noargs)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::CUDACachingAllocator::beforPrefetchWaitAll();
+  END_HANDLE_TH_ERRORS
+  Py_RETURN_NONE;
+}
+
+PyObject *THCPModule_getC10DebugATM(PyObject *_unused, PyObject * arg)
+{
+  HANDLE_TH_ERRORS
+  auto debug_log = c10::cuda::get_debug_log();
+  std::string debug_output = "";
+  int iter = 0;
+  for (auto debug_log_el : debug_log->get_debug(c10::cuda::ATMLogLevel::DEBUG)) {
+    debug_output += "[" + std::to_string(++iter) + "]" + debug_log_el.first + "|=>|" + debug_log_el.second + "\n";
+  }
+  return THPUtils_packString(debug_output);
+  // if (c10::cuda::CUDACachingAllocator::userEnabledLMS()) Py_RETURN_TRUE;
+  // else Py_RETURN_FALSE;
+  END_HANDLE_TH_ERRORS
+}
+
+PyObject *THCPModule_clearC10DebugATM(PyObject *_unused, PyObject * arg)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::get_debug_log()->clear_debug(c10::cuda::ATMLogLevel::DEBUG);
+  Py_RETURN_NONE;
+  END_HANDLE_TH_ERRORS
+}
+
+PyObject *THCPModule_getC10StorageImplProfileATM(PyObject *_unused, PyObject * arg)
+{
+  HANDLE_TH_ERRORS
+  auto impl_profile = c10::cuda::get_impl_profile();
+  std::string profile_output = "";
+  int iter = 0;
+  for (auto impl_profile_el : impl_profile->get_storage_profile()) {
+    profile_output += std::to_string(impl_profile_el.first) + "," +
+                      std::to_string(impl_profile_el.second.data_ptr_) + "," +
+                      std::to_string(impl_profile_el.second.life_start_) + "," +
+                      std::to_string(impl_profile_el.second.life_end_) + "," +
+                      std::to_string(impl_profile_el.second.size_);
+    for (auto access_el : impl_profile_el.second.access_seq_)
+      profile_output += "," + std::to_string(access_el);
+    profile_output += "\n";
+  }
+  return THPUtils_packString(profile_output);
+  END_HANDLE_TH_ERRORS
+}
+
+PyObject *THCPModule_clearC10StorageImplProfileATM(PyObject *_unused, PyObject * arg)
+{
+  HANDLE_TH_ERRORS
+  c10::cuda::get_impl_profile()->clear_storage_profile();
+  Py_RETURN_NONE;
+  END_HANDLE_TH_ERRORS
+}
+
+
 PyObject * THCPModule_cudaSetSyncDebugMode(PyObject * _unused, PyObject * arg){
   HANDLE_TH_ERRORS
   TORCH_WARN_ONCE("Synchronization debug mode is a prototype feature and does not yet detect all " \
@@ -681,6 +774,16 @@ static struct PyMethodDef _THCPModule_methods[] = {
   {"_cuda_resetAccumulatedMemoryStats", THCPModule_resetAccumulatedMemoryStats, METH_O, nullptr},
   {"_cuda_resetPeakMemoryStats", THCPModule_resetPeakMemoryStats, METH_O,  nullptr},
   {"_cuda_memorySnapshot", THCPModule_memorySnapshot, METH_NOARGS, nullptr},
+  // NOTE: Add cuda function here
+  {"_cuda_createSwapEnv", THCPModule_createSwapEnv, METH_NOARGS, nullptr},
+  {"_cuda_closeSwapEnv", THCPModule_closeSwapEnv, METH_NOARGS, nullptr},
+  {"_cuda_prefetchInit", THCPModule_prefetchInit, METH_NOARGS, nullptr},
+  {"_cuda_prefetchAll", THCPModule_prefetchAll, METH_NOARGS, nullptr},
+  {"_cuda_beforPrefetchWaitAll", THCPModule_beforPrefetchWaitAll, METH_NOARGS, nullptr},
+  {"_cuda_getStorageImplProfileATM", THCPModule_getC10StorageImplProfileATM, METH_NOARGS, nullptr},
+  {"_cuda_clearStorageImplProfileATM", THCPModule_clearC10StorageImplProfileATM, METH_NOARGS, nullptr},
+  {"_cuda_getDebugATM", THCPModule_getC10DebugATM, METH_NOARGS, nullptr},
+  {"_cuda_clearDebugATM", THCPModule_clearC10DebugATM, METH_NOARGS, nullptr},
   {"_cuda_cudaHostAllocator", THCPModule_cudaHostAllocator, METH_NOARGS, nullptr},
   {"_cuda_cudaCachingAllocator_raw_alloc", THCPModule_cudaCachingAllocator_raw_alloc, METH_VARARGS, nullptr},
   {"_cuda_cudaCachingAllocator_raw_delete", THCPModule_cudaCachingAllocator_raw_delete, METH_O, nullptr},

@@ -20,14 +20,17 @@ configure_file(
 # torch/utils/hipify/cuda_to_hip_mappings.py for new files
 # and headers you add
 set(C10_CUDA_SRCS
+    ATMConfig.cpp
     CUDAStream.cpp
     CUDAFunctions.cpp
     CUDAMiscFunctions.cpp
     CUDACachingAllocator.cpp
+    CUDASwapQueues.cpp
     impl/CUDAGuardImpl.cpp
     impl/CUDATest.cpp
 )
 set(C10_CUDA_HEADERS
+    ATMConfig.h
     CUDAException.h
     CUDAGuard.h
     CUDAMacros.h
@@ -35,6 +38,7 @@ set(C10_CUDA_HEADERS
     CUDAStream.h
     CUDAFunctions.h
     CUDAMiscFunctions.h
+    CUDASwapQueues.h
     impl/CUDAGuardImpl.h
     impl/CUDATest.h
 )

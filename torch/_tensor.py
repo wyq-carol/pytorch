@@ -82,6 +82,13 @@ def _rebuild_from_type_v2(func, new_type, args, state):
 # torch/__init__.py.in to add a type annotation for your method;
 # otherwise, it will not show up in autocomplete.
 class Tensor(torch._C._TensorBase):
+    def settensorUID(self, uid=-1):
+        self.tensor_uid = uid
+        self.amem_traced = True
+    def gettensorUID(self):
+        if 'tensor_uid' in dir(self):
+            return self.tensor_uid
+        return None
     def __deepcopy__(self, memo):
         if has_torch_function_unary(self):
             return handle_torch_function(Tensor.__deepcopy__, (self,), self, memo)

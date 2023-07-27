@@ -28,6 +28,9 @@
 #include <set>
 #include <unordered_set>
 
+#include <torch/csrc/autograd/profiler_amem.h>
+
+
 PyObject* THPAutograd_initExtension(PyObject* _unused, PyObject *unused) {
   using namespace torch::autograd::profiler;
   using namespace torch::profiler::impl;
@@ -653,6 +656,24 @@ static PyObject * get_torch_function_mode(PyObject* _unused, PyObject* _unused2)
   END_HANDLE_TH_ERRORS
 }
 
+static PyObject * automem_profiler_init(PyObject* _unused, PyObject* _unused2) {
+  HANDLE_TH_ERRORS
+  torch::automem::GetAutoMemProfiler()->init();
+  Py_RETURN_NONE;
+  END_HANDLE_TH_ERRORS
+}
+
+static PyObject * automem_profiler_get_profile(PyObject* _unused, PyObject* _unused2) {
+  HANDLE_TH_ERRORS
+  auto profiler = torch::automem::GetAutoMemProfiler();
+  PyObject* ret_dict = PyDict_New(); 
+  for (auto const& el : profiler->grad_execution_time) {
+    PyDict_SetItem(ret_dict, THPUtils_packInt32(el.first), THPUtils_packInt32(el.second));
+  }
+  return ret_dict;
+  END_HANDLE_TH_ERRORS
+}
+
 // autograd methods on torch._C
 static PyMethodDef methods[] = { // NOLINT
   {"_set_grad_enabled", set_grad_enabled, METH_O, nullptr},
@@ -679,6 +700,10 @@ static PyMethodDef methods[] = { // NOLINT
   {"_get_torch_dispatch_mode", get_torch_dispatch_mode, METH_NOARGS, nullptr},
   {"_set_torch_function_mode", set_torch_function_mode, METH_O, nullptr},
   {"_get_torch_function_mode", get_torch_function_mode, METH_NOARGS, nullptr},
+
+  {"automem_profiler_init", automem_profiler_init, METH_NOARGS, nullptr},
+  {"automem_profiler_get_profile", automem_profiler_get_profile, METH_NOARGS, nullptr},
+  
   {nullptr, nullptr, 0, nullptr}
 };
 
